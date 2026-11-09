@@ -11,4 +11,4 @@ cargo build --release --target wasm32-wasip2
 mkdir -p dist
 cp target/wasm32-wasip2/release/openidea_plugin_commit_message_helper.wasm dist/plugin.wasm
 openidea-plugin check .
-openidea-plugin pack . --out "dist/liuzhiqiang.commit-message-helper-0.3.0.oiplugin"
+openidea-plugin pack . --out "dist/vincent66666.commit-message-helper-0.4.0.oiplugin"

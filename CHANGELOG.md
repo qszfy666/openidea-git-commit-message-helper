@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0
+
+- Published under the publisher id `vincent66666`: the plugin is `vincent66666.commit-message-helper` (earlier ids `com.liuzhiqiang.*` and `liuzhiqiang.*` were never listed, so no one has to migrate — remove an old local install and install this one).
+- Signed package, built from this repository alone against the SDK at tag `v0.1.39`.
+
 ## 0.3.0
 
 - Published to the OpenIDEA community marketplace: the plugin id is `liuzhiqiang.commit-message-helper` (was `com.liuzhiqiang.commit-message-helper`, so existing local installs are a different plugin and can be removed), and packages are signed with the publisher key.
