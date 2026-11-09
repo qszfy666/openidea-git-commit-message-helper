@@ -95,7 +95,7 @@ fn build_request(config: &Config, body: String) -> Result<HttpRequest, Error> {
 pub fn generate(config: &Config, system: &str, user: &str) -> Result<String, Error> {
     if !host::secret_is_set("api-key") {
         return Err(Error::Failed(
-            "No API key. Open Settings › Plugins › Git Commit Message Helper and enter the LLM API key.".into(),
+            "No API key. In Settings › Plugins › Installed, select Git Commit Message Helper and fill in the LLM API key under Secrets.".into(),
         ));
     }
 
@@ -117,7 +117,7 @@ pub fn generate(config: &Config, system: &str, user: &str) -> Result<String, Err
 pub fn test(config: &Config) -> Result<String, Error> {
     if !host::secret_is_set("api-key") {
         return Err(Error::Failed(
-            "No API key. Open Settings › Plugins › Git Commit Message Helper and enter the LLM API key.".into(),
+            "No API key. In Settings › Plugins › Installed, select Git Commit Message Helper and fill in the LLM API key under Secrets.".into(),
         ));
     }
     if config.effective_model().is_empty() {
@@ -137,7 +137,16 @@ pub fn test(config: &Config) -> Result<String, Error> {
             error_message(&text)
         )));
     }
-    extract_content(config.protocol, &text)?;
+    // A 2xx proves the endpoint, key and model; the body only has to be JSON.
+    // The content is not checked: a reasoning model given the 16-token budget
+    // answers `content: null` with `finish_reason: "length"`, which is a
+    // working connection, not a failure.
+    serde_json::from_str::<Value>(text.trim()).map_err(|e| {
+        Error::Failed(format!(
+            "LLM test returned non-JSON response: {e}: {}",
+            clip(&text, 400)
+        ))
+    })?;
     Ok(format!(
         "HTTP {} · {}",
         response.status,

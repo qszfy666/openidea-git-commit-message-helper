@@ -35,7 +35,7 @@ cargo test
 cargo build --release --target wasm32-wasip2
 mkdir -p dist
 cp target/wasm32-wasip2/release/openidea_plugin_commit_message_helper.wasm dist/plugin.wasm
-openidea-plugin pack . --out dist/qszfy666.commit-message-helper-0.5.1.oiplugin   # unsigned, for local install
+openidea-plugin pack . --out dist/qszfy666.commit-message-helper-0.5.2.oiplugin   # unsigned, for local install
 ```
 
 Then either:
@@ -59,7 +59,7 @@ Open **Settings › Plugins** to load the change. The plugin appears as **Git Co
 | Prompts | Extra system prompt for persistent preferences. |
 | LLM Settings | Provider preset, API protocol, Base URL, Model, Temperature, Max response tokens, and a **Test** button that applies the pending settings and makes a minimal request to check the connection. |
 
-The API key is a plugin secret: **Settings › Plugins › Git Commit Message Helper › API key**.
+The API key is a plugin secret, and it is not on any of those pages: **Settings › Plugins › Installed › select Git Commit Message Helper › Secrets › LLM API key › Save**. It is kept in the system keychain, never in the settings files.
 
 The plugin declares these optional network capabilities; grant the ones you use:
 

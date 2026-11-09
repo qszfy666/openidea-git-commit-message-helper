@@ -32,7 +32,7 @@ cargo test
 cargo build --release --target wasm32-wasip2
 mkdir -p dist
 cp target/wasm32-wasip2/release/openidea_plugin_commit_message_helper.wasm dist/plugin.wasm
-openidea-plugin pack . --out dist/qszfy666.commit-message-helper-0.5.1.oiplugin   # 未签名，本地安装用
+openidea-plugin pack . --out dist/qszfy666.commit-message-helper-0.5.2.oiplugin   # 未签名，本地安装用
 ```
 
 然后：
@@ -52,7 +52,7 @@ openidea-plugin pack . --out dist/qszfy666.commit-message-helper-0.5.1.oiplugin 
 | Prompts | 额外的系统提示词，用于长期偏好。 |
 | LLM Settings | Provider 预设、API 协议、Base URL、Model、Temperature、Max response tokens，以及 **Test** 按钮；Test 会先应用当前待保存设置，再发起一次最小请求检查连接。 |
 
-API Key 是插件 secret：**Settings › Plugins › Git Commit Message Helper › API key**。
+API Key 是插件 secret，不在这三个页面里：**Settings › Plugins › 已安装 里选中 Git Commit Message Helper › 右侧「密钥」› LLM API key › 保存**。它存在系统钥匙串，不写入设置文件。
 
 插件声明的可选网络能力（按需授权）：
 

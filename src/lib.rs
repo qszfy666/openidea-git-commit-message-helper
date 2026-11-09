@@ -457,4 +457,57 @@ mod tests {
         let result = plugin.run_command("test", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
     }
+
+    #[test]
+    fn test_command_accepts_an_answer_truncated_by_the_token_budget() {
+        let host = MockHost::install().with_capabilities(&["secrets", "net:api.deepseek.com"]);
+        host.set_secret("api-key", "test-key");
+        // A reasoning model spends the test's 16-token budget thinking and has
+        // no content left: the connection, key and model still work.
+        host.on_fetch(|_| {
+            Ok(HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: serde_json::to_vec(&serde_json::json!({
+                    "choices": [{
+                        "finish_reason": "length",
+                        "index": 0,
+                        "message": {
+                            "content": null,
+                            "reasoning_content": "The user just said ping.",
+                            "role": "assistant"
+                        }
+                    }],
+                    "id": "chatcmpl-test",
+                    "model": "a-reasoning-model",
+                    "object": "chat.completion",
+                    "usage": {"completion_tokens": 16}
+                }))
+                .unwrap(),
+            })
+        });
+
+        let result = CommitMessageHelper.run_command("test", &host.invocation(), None);
+        assert!(result.is_ok(), "the connection works: {result:?}");
+        assert_eq!(
+            host.notifications().last().unwrap().level,
+            NotificationLevel::Info
+        );
+    }
+
+    #[test]
+    fn test_command_rejects_an_answer_that_is_not_json() {
+        let host = MockHost::install().with_capabilities(&["secrets", "net:api.deepseek.com"]);
+        host.set_secret("api-key", "test-key");
+        host.on_fetch(|_| {
+            Ok(HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: b"<html>gateway</html>".to_vec(),
+            })
+        });
+
+        let result = CommitMessageHelper.run_command("test", &host.invocation(), None);
+        assert!(result.is_err(), "a non-JSON answer is not a passing test");
+    }
 }

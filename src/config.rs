@@ -239,7 +239,7 @@ impl Config {
                 .unwrap_or(0.5)
                 .clamp(0.0, 2.0),
             max_tokens: host::setting_number("maxTokens")
-                .unwrap_or(4096.0)
+                .unwrap_or(64_000.0)
                 .clamp(256.0, 128_000.0) as u32,
             language: MessageLanguage::parse(host::setting_string("language").as_deref()),
             max_diff_chars: host::setting_number("maxDiffChars")
@@ -283,6 +283,10 @@ mod tests {
         assert_eq!(config.protocol, Protocol::OpenAiChat);
         assert_eq!(config.effective_base_url(), "https://api.deepseek.com/v1");
         assert_eq!(config.effective_model(), "deepseek-chat");
+        assert_eq!(
+            config.max_tokens, 64_000,
+            "room for a reasoning model, within what Anthropic accepts"
+        );
         assert_eq!(config.commit_types.len(), 11);
     }
 

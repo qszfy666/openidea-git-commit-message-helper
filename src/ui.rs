@@ -22,7 +22,7 @@ pub struct Strings {
 const ZH: Strings = Strings {
     no_repository: "当前窗口没有打开的 Git 仓库。",
     no_changes: "提交面板里没有勾选任何变更。",
-    not_configured: "还没有配置 LLM API Key。请在 Settings › Plugins › Git Commit Message Helper 中配置。",
+    not_configured: "还没有配置 LLM API Key。请在 Settings › Plugins 的「已安装」里选中本插件，在右侧「密钥」中填入 LLM API key 并保存。",
     collecting: "正在读取提交面板中的变更…",
     generating: "正在调用模型…",
     generating_now: "正在生成提交信息…",
@@ -37,7 +37,7 @@ const ZH: Strings = Strings {
 const EN: Strings = Strings {
     no_repository: "No Git repository is open in this window.",
     no_changes: "No changes are included in the commit panel.",
-    not_configured: "No LLM API key yet. Set one in Settings › Plugins › Git Commit Message Helper.",
+    not_configured: "No LLM API key yet. In Settings › Plugins › Installed, select Git Commit Message Helper, fill in the LLM API key under Secrets, and save.",
     collecting: "Reading the changes in the commit panel…",
     generating: "Calling the model…",
     generating_now: "Generating commit message…",
