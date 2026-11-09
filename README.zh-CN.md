@@ -23,7 +23,7 @@
 
 ## 安装
 
-**Settings › Plugins › Available** 里搜索 **Git Commit Message Helper**（市场 id：`vincent66666.commit-message-helper`，通过[社区 registry](https://github.com/l0ng-ai/openidea-plugins) 收录），安装并按提示授予能力。
+**Settings › Plugins › Available** 里搜索 **Git Commit Message Helper**（市场 id：`qszfy666.commit-message-helper`，通过[社区 registry](https://github.com/l0ng-ai/openidea-plugins) 收录），安装并按提示授予能力。
 
 离线时自己构建：
 
@@ -32,7 +32,7 @@ cargo test
 cargo build --release --target wasm32-wasip2
 mkdir -p dist
 cp target/wasm32-wasip2/release/openidea_plugin_commit_message_helper.wasm dist/plugin.wasm
-openidea-plugin pack . --out dist/vincent66666.commit-message-helper-0.4.0.oiplugin   # 未签名，本地安装用
+openidea-plugin pack . --out dist/qszfy666.commit-message-helper-0.5.0.oiplugin   # 未签名，本地安装用
 ```
 
 然后：

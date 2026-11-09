@@ -24,7 +24,7 @@ No `git` binary is needed: the IDE supplies the pending commit and its diffs.
 ## Install
 
 **Settings › Plugins › Available**, search for **Git Commit Message Helper** (published as
-`vincent66666.commit-message-helper` through the
+`qszfy666.commit-message-helper` through the
 [community registry](https://github.com/l0ng-ai/openidea-plugins)), install it and grant the
 capabilities the install page asks for.
 
@@ -35,7 +35,7 @@ cargo test
 cargo build --release --target wasm32-wasip2
 mkdir -p dist
 cp target/wasm32-wasip2/release/openidea_plugin_commit_message_helper.wasm dist/plugin.wasm
-openidea-plugin pack . --out dist/vincent66666.commit-message-helper-0.4.0.oiplugin   # unsigned, for local install
+openidea-plugin pack . --out dist/qszfy666.commit-message-helper-0.5.0.oiplugin   # unsigned, for local install
 ```
 
 Then either:
