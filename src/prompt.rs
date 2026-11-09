@@ -1,0 +1,377 @@
+//! Prompt construction, response parsing and local rendering of the commit
+//! message.
+//!
+//! Like the reference IntelliJ plugin, the model returns *fields* as JSON and
+//! the plugin renders the final Conventional Commit text itself. That keeps
+//! the formatting consistent regardless of the model's mood.
+
+use crate::config::Config;
+use crate::git::GitContext;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommitFields {
+    #[serde(rename = "type", default)]
+    pub commit_type: String,
+    #[serde(default)]
+    pub scope: String,
+    #[serde(default)]
+    pub subject: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub changes: String,
+    #[serde(default)]
+    pub closes: String,
+    #[serde(rename = "skipCi", default)]
+    pub skip_ci: String,
+}
+
+const SYSTEM_PROMPT: &str = "You are a senior engineer and Git maintainer. Analyze the selected changes carefully, identify the primary intent, and fill the commit template fields. Keep your analysis internal and return only the requested JSON.";
+
+const ANALYSIS_INSTRUCTIONS: &str = "Internal Analysis Instructions (do not output this analysis):\n\
+1. Inspect the selected file status, the diff hunks and the tests.\n\
+2. Identify the primary user-visible or technical intent, not just the changed filenames.\n\
+3. Separate the main change from incidental formatting, generated files, lockfiles, and mechanical churn.\n\
+4. Choose one type from the allowed types below.\n\
+5. Keep `scope` a short lowercase identifier for the affected area; leave it empty when the change is not confined to one.";
+
+fn output_contract(config: &Config, language: &str) -> String {
+    format!(
+        "JSON Output Contract:\n\
+1. Return valid JSON only; no markdown fences, labels, explanation, or analysis.\n\
+2. Use this exact shape: {{\"type\":\"\",\"scope\":\"\",\"subject\":\"\",\"body\":\"\",\"changes\":\"\",\"closes\":\"\",\"skipCi\":\"\"}}.\n\
+3. The plugin renders these fields with a Conventional Commits template; do not include template syntax in the values.\n\
+4. Keep `type` and `scope` as lowercase English identifiers; write `subject`, `body` and `changes` in {language}.\n\
+5. `subject` must be concrete, imperative, under 72 characters, and must not end with punctuation.\n\
+6. Do not use vague subjects like \"update files\", \"modify code\", \"change logic\", \"adjust configuration\", or a filename alone.\n\
+7. `body` is the detailed description. Use an empty string only when the subject is sufficient.\n\
+8. When `body` has more than one detail, format it as Markdown bullet lines that each start with \"- \". One changed behaviour or impact per bullet; no long paragraph.\n\
+9. `changes` contains only breaking-change text without the \"BREAKING CHANGE:\" prefix.\n\
+10. `closes` contains only issue references without the \"Closes\" prefix.\n\
+11. `skipCi` is empty unless the selected changes clearly require a skip-ci marker.\n\
+12. Allowed types: {}.",
+        config.commit_types.join(", ")
+    )
+}
+
+pub fn build_prompts(config: &Config, context: &GitContext) -> (String, String) {
+    let language = config.language.prompt_language();
+    let mut system = SYSTEM_PROMPT.to_owned();
+    if !config.extra_prompt.is_empty() {
+        system.push_str("\n\nPersistent User Preferences:\n");
+        system.push_str(&config.extra_prompt);
+        system.push_str(
+            "\n\nFollow these preferences when they do not conflict with the required JSON shape, the allowed types, the git diff, or the output constraints.",
+        );
+    }
+
+    let status = if context.status_lines.is_empty() {
+        "(none)".to_owned()
+    } else {
+        context.status_lines.join("\n")
+    };
+    let diff = if context.diff.trim().is_empty() {
+        "(no textual diff)"
+    } else {
+        context.diff.as_str()
+    };
+
+    let user = format!(
+        "Generate git commit fields for this project.\n\n{ANALYSIS_INSTRUCTIONS}\n\n{}\n\n\
+Repository Root:\n{}\n\nBranch:\n{}\n\nSelected Files Status:\n{}\n\nSelected Changes Diff:\n{}",
+        output_contract(config, language),
+        context.root,
+        context.branch,
+        status,
+        diff
+    );
+    (system, user)
+}
+
+/// Removes reasoning wrappers (`<think…>`, `<thinking…>`) and Markdown code
+/// fences around a JSON payload.
+pub fn unwrap_json_text(text: &str) -> String {
+    let mut value = text.trim();
+    // Common reasoning tags used by local models.
+    for close in ["</think>", "</thinking>", "</reasoning>"] {
+        if let Some(pos) = value.rfind(close) {
+            value = value[pos + close.len()..].trim();
+        }
+    }
+    if let Some(rest) = value.strip_prefix("```json") {
+        value = rest.trim();
+    } else if let Some(rest) = value.strip_prefix("```") {
+        value = rest.trim();
+    }
+    if let Some(rest) = value.strip_suffix("```") {
+        value = rest.trim();
+    }
+    value.to_owned()
+}
+
+fn text_field(value: &Value, key: &str) -> String {
+    match value.get(key) {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(items)) => {
+            let mut parts = Vec::new();
+            for item in items {
+                if let Value::String(text) = item {
+                    parts.push(format!("- {}", text.trim()));
+                }
+            }
+            parts.join("\n")
+        }
+        Some(Value::Null) | None => String::new(),
+        Some(other) => other.to_string(),
+    }
+}
+
+/// Parses the model response into fields. Tolerates reasoning tags, code
+/// fences, arrays in `body`, and (as a last resort) a plain Conventional
+/// Commit line.
+pub fn parse_response(text: &str) -> Option<CommitFields> {
+    let unwrapped = unwrap_json_text(text);
+    if let (Some(start), Some(end)) = (unwrapped.find('{'), unwrapped.rfind('}'))
+        && start < end
+    {
+        let slice = &unwrapped[start..=end];
+        if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(slice) {
+            let value = Value::Object(map);
+            let fields = CommitFields {
+                commit_type: text_field(&value, "type").trim().to_owned(),
+                scope: text_field(&value, "scope").trim().to_owned(),
+                subject: text_field(&value, "subject").trim().to_owned(),
+                body: text_field(&value, "body").trim().to_owned(),
+                changes: text_field(&value, "changes").trim().to_owned(),
+                closes: text_field(&value, "closes").trim().to_owned(),
+                skip_ci: text_field(&value, "skipCi").trim().to_owned(),
+            };
+            if !fields.subject.is_empty() || !fields.commit_type.is_empty() {
+                return Some(fields);
+            }
+        }
+    }
+
+    // Lenient fallback: pull `"key": "value"` pairs one by one. Models that
+    // emit an unterminated final string still give us the earlier fields.
+    let mut fields = CommitFields::default();
+    for key in [
+        "type", "scope", "subject", "body", "changes", "closes", "skipCi",
+    ] {
+        if let Some(value) = lenient_string_field(&unwrapped, key) {
+            match key {
+                "type" => fields.commit_type = value,
+                "scope" => fields.scope = value,
+                "subject" => fields.subject = value,
+                "body" => fields.body = value,
+                "changes" => fields.changes = value,
+                "closes" => fields.closes = value,
+                "skipCi" => fields.skip_ci = value,
+                _ => {}
+            }
+        }
+    }
+    if !fields.subject.is_empty() {
+        return Some(fields);
+    }
+
+    // Last resort: a plain `type(scope): subject` line, with the rest as body.
+    let mut lines = unwrapped.lines();
+    let first = lines.next()?.trim();
+    let mut parsed = parse_conventional_line(first)?;
+    let rest: Vec<&str> = lines.collect();
+    if !rest.is_empty() {
+        parsed.body = rest.join("\n").trim().to_owned();
+    }
+    Some(parsed)
+}
+
+fn parse_conventional_line(line: &str) -> Option<CommitFields> {
+    let (head, subject) = line.split_once(':')?;
+    let subject = subject.trim();
+    if subject.is_empty() {
+        return None;
+    }
+    let head = head.trim();
+    let (commit_type, scope) = match head.split_once('(') {
+        Some((kind, rest)) if rest.ends_with(')') => (kind.trim(), rest[..rest.len() - 1].trim()),
+        _ => (head, ""),
+    };
+    if commit_type.is_empty() || commit_type.contains(char::is_whitespace) {
+        return None;
+    }
+    Some(CommitFields {
+        commit_type: commit_type.to_owned(),
+        scope: scope.to_owned(),
+        subject: subject.to_owned(),
+        ..CommitFields::default()
+    })
+}
+
+fn lenient_string_field(text: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let at = text.find(&needle)?;
+    let after = &text[at + needle.len()..];
+    let colon = after.find(':')?;
+    let rest = after[colon + 1..].trim_start();
+    let rest = rest.strip_prefix('"')?;
+    let mut value = String::new();
+    let mut escaped = false;
+    for c in rest.chars() {
+        if escaped {
+            value.push(c);
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+        } else if c == '"' {
+            return Some(value);
+        } else {
+            value.push(c);
+        }
+    }
+    // Unterminated string: use what is there.
+    if !value.is_empty() { Some(value) } else { None }
+}
+
+fn normalize_body(body: &str) -> String {
+    let lines: Vec<&str> = body
+        .lines()
+        .map(str::trim_end)
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    if lines.len() <= 1 {
+        return body.trim().to_owned();
+    }
+    if lines
+        .iter()
+        .all(|line| line.trim_start().starts_with('-') || line.trim_start().starts_with('*'))
+    {
+        return lines
+            .iter()
+            .map(|line| line.trim_start().to_owned())
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    lines
+        .iter()
+        .map(|line| {
+            let line = line.trim();
+            if line.starts_with('-') || line.starts_with('*') {
+                line.to_owned()
+            } else {
+                format!("- {line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Renders the fields as the final Conventional Commit message.
+pub fn render(fields: &CommitFields) -> String {
+    let mut out = String::new();
+    if !fields.commit_type.is_empty() || !fields.scope.is_empty() {
+        out.push_str(fields.commit_type.trim());
+        if !fields.scope.is_empty() {
+            out.push('(');
+            out.push_str(fields.scope.trim());
+            out.push(')');
+        }
+        out.push_str(": ");
+    }
+    out.push_str(fields.subject.trim());
+
+    let body = normalize_body(&fields.body);
+    if !body.is_empty() {
+        out.push_str("\n\n");
+        out.push_str(&body);
+    }
+    if !fields.changes.trim().is_empty() {
+        out.push_str("\n\nBREAKING CHANGE: ");
+        out.push_str(fields.changes.trim());
+    }
+    if !fields.closes.trim().is_empty() {
+        out.push_str("\n\nCloses ");
+        out.push_str(fields.closes.trim());
+    }
+    if !fields.skip_ci.trim().is_empty() {
+        out.push_str("\n\n");
+        out.push_str(fields.skip_ci.trim());
+    }
+    out.trim_end().to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_context() -> GitContext {
+        GitContext {
+            root: "/tmp/repo".into(),
+            branch: "main".into(),
+            status_lines: vec!["[M] src/a.rs".into()],
+            diff: "diff --git a/src/a.rs b/src/a.rs\n@@ -1 +1 @@\n-old\n+new".into(),
+        }
+    }
+
+    #[test]
+    fn renders_conventional_message() {
+        let fields = CommitFields {
+            commit_type: "feat".into(),
+            scope: "parser".into(),
+            subject: "支持新的语法".into(),
+            body: "第一行\n第二行".into(),
+            changes: "旧接口被移除".into(),
+            closes: "#12".into(),
+            skip_ci: "[skip ci]".into(),
+        };
+        let message = render(&fields);
+        assert_eq!(
+            message,
+            "feat(parser): 支持新的语法\n\n- 第一行\n- 第二行\n\nBREAKING CHANGE: 旧接口被移除\n\nCloses #12\n\n[skip ci]"
+        );
+    }
+
+    #[test]
+    fn parses_json_with_fences_and_think() {
+        let text = "<think>hmm</think>\n```json\n{\"type\":\"fix\",\"scope\":\"\",\"subject\":\"修复空指针\",\"body\":[\"a\",\"b\"],\"changes\":\"\",\"closes\":\"\",\"skipCi\":\"\"}\n```";
+        let fields = parse_response(text).unwrap();
+        assert_eq!(fields.commit_type, "fix");
+        assert_eq!(fields.subject, "修复空指针");
+        assert_eq!(fields.body, "- a\n- b");
+    }
+
+    #[test]
+    fn parses_plain_conventional_line() {
+        let fields =
+            parse_response("refactor(core): split the parser\n\nMoves the lexer out.").unwrap();
+        assert_eq!(fields.commit_type, "refactor");
+        assert_eq!(fields.scope, "core");
+        assert_eq!(fields.subject, "split the parser");
+        assert_eq!(fields.body, "Moves the lexer out.");
+    }
+
+    #[test]
+    fn prompt_mentions_types_and_language() {
+        let host = openidea_plugin::mock::MockHost::install();
+        host.set_setting("language", "\"Chinese\"");
+        host.set_setting("commitTypes", "\"feat,fix\"");
+        let config = Config::load();
+        let (system, user) = build_prompts(&config, &sample_context());
+        assert!(system.contains("senior engineer"));
+        assert!(user.contains("feat, fix"));
+        assert!(user.contains("Simplified Chinese"));
+        assert!(user.contains("Selected Changes Diff"));
+    }
+
+    #[test]
+    fn auto_language_follows_the_ide_locale() {
+        let host = openidea_plugin::mock::MockHost::install();
+        let config = Config::load();
+        host.set_locale("zh-CN");
+        assert_eq!(config.language.prompt_language(), "Simplified Chinese");
+        host.set_locale("en");
+        assert_eq!(config.language.prompt_language(), "English");
+    }
+}

@@ -1,0 +1,62 @@
+{
+  "properties": {
+    "provider": {
+      "type": "string",
+      "enum": [
+        "OpenAI",
+        "Anthropic",
+        "DeepSeek",
+        "Qwen",
+        "Kimi",
+        "GLM",
+        "MiniMax",
+        "SiliconFlow",
+        "Volcengine",
+        "Azure OpenAI",
+        "OpenRouter",
+        "Groq",
+        "Mistral",
+        "Ollama",
+        "Magpie",
+        "Custom"
+      ],
+      "title": "Provider preset",
+      "group": "Provider",
+      "default": "DeepSeek"
+    },
+    "protocol": {
+      "type": "string",
+      "enum": ["auto", "openai-chat", "openai-responses", "anthropic"],
+      "title": "API protocol",
+      "description": "auto follows the provider.",
+      "group": "Provider",
+      "default": "auto"
+    },
+    "baseUrl": {
+      "type": "string",
+      "title": "Base URL",
+      "description": "Blank uses the provider preset.",
+      "group": "Provider",
+      "default": ""
+    },
+    "model": {
+      "type": "string",
+      "title": "Model",
+      "description": "Blank uses the provider default.",
+      "group": "Provider",
+      "default": ""
+    },
+    "temperature": {
+      "type": "number",
+      "title": "Temperature",
+      "group": "Sampling",
+      "default": 0.5
+    },
+    "maxTokens": {
+      "type": "integer",
+      "title": "Max response tokens",
+      "group": "Sampling",
+      "default": 4096
+    }
+  }
+}

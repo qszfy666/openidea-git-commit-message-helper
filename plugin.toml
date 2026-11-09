@@ -1,0 +1,92 @@
+id = "liuzhiqiang.commit-message-helper"
+name = "Git Commit Message Helper"
+version = "0.3.0"
+description = "Generate a Conventional Commits message for the changes selected in OpenIDEA's native Commit panel, with an LLM."
+authors = ["liuzhiqiang"]
+license = "Apache-2.0"
+icon = "icon.svg"
+icon-dark = "icon_dark.svg"
+change-notes = "0.3.0 — first marketplace release: plugin id is now liuzhiqiang.commit-message-helper, the package is signed with the publisher key, and the build uses the OpenIDEA SDK at tag v0.1.39 instead of a local path."
+categories = ["vcs", "ai"]
+engines.openidea = "^1.3"
+wasm = "dist/plugin.wasm"
+
+[capabilities]
+# The commit workflow: pending_commit reads the included changes and
+# set_commit_message writes the draft message. The API key is a plugin secret
+# and is filled in by the IDE when host::fetch sends a request.
+required = ["vcs.read", "vcs.write", "secrets"]
+# Grant only the endpoints you use. `127.0.0.1` covers Magpie and local
+# OpenAI-compatible servers; `localhost` covers Ollama-on-localhost.
+optional = [
+  "net:api.openai.com",
+  "net:api.anthropic.com",
+  "net:api.deepseek.com",
+  "net:dashscope.aliyuncs.com",
+  "net:api.moonshot.cn",
+  "net:open.bigmodel.cn",
+  "net:api.minimax.chat",
+  "net:api.siliconflow.cn",
+  "net:ark.cn-beijing.volces.com",
+  "net:*.openai.azure.com",
+  "net:openrouter.ai",
+  "net:api.groq.com",
+  "net:api.mistral.ai",
+  "net:generativelanguage.googleapis.com",
+  "net:127.0.0.1",
+  "net:localhost",
+]
+
+[[contributes.commands]]
+id = "generate"
+title = "Generate Commit Message"
+category = "Git Commit Message Helper"
+when = "vcsAvailable"
+
+[[contributes.commands]]
+id = "test"
+title = "Test LLM Connection"
+category = "Git Commit Message Helper"
+
+# The "Generate Commit Message" button above the message field of both the
+# Commit tool window and the Commit dialog.
+[[contributes.menus]]
+menu = "commit.message"
+command = "generate"
+
+# Keep a Tools-menu entry for discoverability and for running it with a keymap.
+[[contributes.menus]]
+menu = "tools"
+command = "generate"
+
+[[contributes.keymaps]]
+command = "generate"
+key = "Ctrl+Alt+G"
+mac = "Meta+Alt+G"
+
+[contributes.settings]
+title = "Git Commit Message Helper"
+
+[[contributes.settings.pages]]
+id = "commit"
+title = "Commit"
+schema = "settings/commit.json"
+
+[[contributes.settings.pages]]
+id = "prompts"
+title = "Prompts"
+schema = "settings/prompts.json"
+
+[[contributes.settings.pages]]
+id = "llm"
+title = "LLM Settings"
+schema = "settings/llm.json"
+
+[[contributes.settings.pages.actions]]
+title = "Test"
+command = "test"
+
+[[contributes.secrets]]
+name = "api-key"
+label = "LLM API key"
+description = "Sent only to the endpoint you configure. Kept in the system keychain."

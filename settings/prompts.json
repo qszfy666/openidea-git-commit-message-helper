@@ -1,0 +1,12 @@
+{
+  "properties": {
+    "extraPrompt": {
+      "type": "string",
+      "multiline": true,
+      "title": "Extra system prompt",
+      "description": "Optional persistent preferences added to the system prompt.",
+      "group": "Prompt",
+      "default": ""
+    }
+  }
+}
