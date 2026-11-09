@@ -51,13 +51,9 @@ impl CommitMessageHelper {
                 return Err(Error::Cancelled);
             }
 
-            let fields = prompt::parse_response(&raw)
+            let fields = prompt::parse_response(&raw, &config.commit_types)
                 .ok_or_else(|| Error::Failed(strings.bad_response.to_owned()))?;
-            let message = prompt::render(&fields);
-            if message.trim().is_empty() {
-                return Err(Error::Failed(strings.bad_response.to_owned()));
-            }
-            Ok(message)
+            Ok(prompt::render(&fields))
         })();
         let message = match generated {
             Ok(message) => message,
@@ -302,7 +298,12 @@ mod tests {
         progress.clear();
         assert_eq!(host.commit_draft().expect("still there").message, "");
 
+        let draft = host.commit_draft().expect("the draft is there");
         let progress = Progress::start(ui::strings(UiLanguage::En), &draft);
+        assert_eq!(
+            host.commit_draft().expect("still there").message,
+            "Generating commit message…"
+        );
         host.edit_commit_message("typed meanwhile");
         progress.clear();
         assert_eq!(
@@ -367,6 +368,76 @@ mod tests {
                 .message,
             ""
         );
+    }
+
+    #[test]
+    fn generation_validates_commit_headers_before_writing() {
+        let cases = [
+            (r#"{"type":"fix"}"#, None),
+            (r#"{"subject":"fix crash"}"#, None),
+            (r#"{"type":"fix","subject":"  "}"#, None),
+            (r#"{"type":"banana","subject":"fix crash"}"#, None),
+            ("banana: fix crash", None),
+            (r#"{"type":"banana","subject":"fix crash"#, None),
+            (r#"{"type":"fix","subject":42}"#, None),
+            (r#"{"type":"fix","subject":["fix crash"]}"#, None),
+            (r#"{"type":"fix","subject":"fix\ncrash"}"#, None),
+            (
+                r#"{"type":"fix","scope":"core)\n","subject":"fix crash"}"#,
+                None,
+            ),
+            (
+                r#"{"type":"security","subject":"restrict access"}"#,
+                Some("security: restrict access"),
+            ),
+            ("fix(core): fix crash", Some("fix(core): fix crash")),
+            (
+                r#"{"type":"fix","subject":"fix crash"#,
+                Some("fix: fix crash"),
+            ),
+        ];
+        for (raw, expected) in cases {
+            for initial in ["old message", ""] {
+                let host = MockHost::install().with_capabilities(&[
+                    "vcs.read",
+                    "vcs.write",
+                    "secrets",
+                    "net:api.deepseek.com",
+                ]);
+                host.set_secret("api-key", "test-key");
+                host.set_setting("commitTypes", r#"["fix","security"]"#);
+                host.set_commit_draft(Some(draft_with_message(initial)));
+                host.on_fetch(move |_| {
+                    Ok(HttpResponse {
+                        status: 200,
+                        headers: Vec::new(),
+                        body: serde_json::to_vec(&serde_json::json!({
+                            "choices": [{"message": {"content": raw}}]
+                        }))
+                        .unwrap(),
+                    })
+                });
+
+                let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+                assert!(result.is_ok(), "{raw}: {result:?}");
+                assert_eq!(
+                    host.commit_draft()
+                        .expect("the draft is still there")
+                        .message,
+                    expected.unwrap_or(initial),
+                    "response: {raw}, initial message: {initial:?}"
+                );
+                assert_eq!(
+                    host.notifications().last().unwrap().level,
+                    if expected.is_some() {
+                        NotificationLevel::Info
+                    } else {
+                        NotificationLevel::Error
+                    },
+                    "response: {raw}"
+                );
+            }
+        }
     }
 
     #[test]

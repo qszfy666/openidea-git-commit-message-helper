@@ -103,30 +103,42 @@ fn is_diff_header(line: &str) -> bool {
         || line.starts_with("### ")
 }
 
-/// Caps a unified diff: every file header is kept, but each hunk keeps at most
-/// 24 changed lines and 4 context lines, and the whole text stops at
-/// `max_chars` with an explicit "omitted" marker. This mirrors the reference
-/// plugin's behaviour and keeps prompts affordable on large diffs.
+/// Summarizes diffs exceeding `max_chars`, reserving room for an omission marker.
+/// Each hunk keeps up to 12 added lines, 12 removed lines and 4 context lines.
+/// File and hunk headers are retained while the character budget permits.
 pub fn trim_diff(diff: &str, max_chars: usize) -> String {
     if diff.chars().count() <= max_chars {
         return diff.trim_end().to_owned();
     }
 
+    let note_budget = format!(
+        "...[diff summarized: omitted {} lines]",
+        diff.lines().count()
+    )
+    .len();
+    let content_budget = max_chars.saturating_sub(note_budget);
     let mut out = String::new();
     let mut omitted = 0usize;
-    let mut changed_in_hunk = 0usize;
+    let mut added_in_hunk = 0usize;
+    let mut removed_in_hunk = 0usize;
     let mut context_in_hunk = 0usize;
 
     for line in diff.lines() {
         let keep = if line.starts_with("@@") {
-            changed_in_hunk = 0;
+            added_in_hunk = 0;
+            removed_in_hunk = 0;
             context_in_hunk = 0;
             true
         } else if is_diff_header(line) {
             true
         } else if line.starts_with('+') || line.starts_with('-') {
-            if changed_in_hunk < 24 {
-                changed_in_hunk += 1;
+            let changed_in_hunk = if line.starts_with('+') {
+                &mut added_in_hunk
+            } else {
+                &mut removed_in_hunk
+            };
+            if *changed_in_hunk < 12 {
+                *changed_in_hunk += 1;
                 true
             } else {
                 omitted += 1;
@@ -141,7 +153,7 @@ pub fn trim_diff(diff: &str, max_chars: usize) -> String {
         };
 
         if keep {
-            if out.chars().count() + line.chars().count() + 1 > max_chars {
+            if out.chars().count() + line.chars().count() + 1 > content_budget {
                 omitted += 1;
                 continue;
             }
@@ -151,11 +163,9 @@ pub fn trim_diff(diff: &str, max_chars: usize) -> String {
     }
 
     if omitted > 0 {
-        let note = format!("...[diff summarized: omitted {omitted} lines]");
-        if out.chars().count() + note.chars().count() < max_chars {
-            out.push_str(&note);
-            out.push('\n');
-        }
+        let mut note = format!("...[diff summarized: omitted {omitted} lines]");
+        note.truncate(max_chars);
+        out.push_str(&note);
     }
     out.trim_end().to_owned()
 }
@@ -215,5 +225,62 @@ mod tests {
         assert!(trimmed.contains("omitted"));
         assert!(trimmed.len() <= 600, "got {} chars", trimmed.len());
         assert!(trimmed.lines().filter(|l| l.starts_with('-')).count() <= 24);
+    }
+
+    #[test]
+    fn large_replacements_keep_both_removed_and_added_lines() {
+        let mut diff = String::from("diff --git a/a b/a\n--- a/a\n+++ b/a\n");
+        for hunk in 0..2 {
+            diff.push_str(&format!(
+                "@@ -{},50 +{},50 @@\n",
+                hunk * 50 + 1,
+                hunk * 50 + 1
+            ));
+            for i in 0..50 {
+                diff.push_str(&format!("-old_{hunk}_{i} calls old_api\n"));
+            }
+            for i in 0..50 {
+                diff.push_str(&format!("+new_{hunk}_{i} calls new_api\n"));
+            }
+        }
+        let trimmed = trim_diff(&diff, 3000);
+        for hunk in 0..2 {
+            assert_eq!(
+                trimmed
+                    .lines()
+                    .filter(|line| line.starts_with(&format!("-old_{hunk}_")))
+                    .count(),
+                12
+            );
+            assert_eq!(
+                trimmed
+                    .lines()
+                    .filter(|line| line.starts_with(&format!("+new_{hunk}_")))
+                    .count(),
+                12
+            );
+        }
+        assert!(trimmed.contains("omitted"));
+        assert!(trimmed.chars().count() <= 3000);
+    }
+
+    #[test]
+    fn reserves_space_for_the_omission_marker() {
+        for character in ['x', '新'] {
+            let mut diff = String::from(
+                "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -0,0 +1,12 @@\n",
+            );
+            for i in 0..11 {
+                diff.push_str(&format!(
+                    "+line_{i:02} {}\n",
+                    character.to_string().repeat(164)
+                ));
+            }
+            diff.push_str(&format!("+{}\n", character.to_string().repeat(500)));
+            let trimmed = trim_diff(&diff, 2000);
+            assert!(trimmed.contains("omitted"), "truncation must be marked");
+            assert!(trimmed.ends_with("lines]"));
+            assert!(trimmed.chars().count() <= 2000);
+        }
     }
 }

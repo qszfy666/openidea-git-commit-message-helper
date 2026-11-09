@@ -1,12 +1,12 @@
 id = "qszfy666.commit-message-helper"
 name = "Git Commit Message Helper"
-version = "0.5.0"
+version = "0.5.1"
 description = "Generate a Conventional Commits message for the changes selected in OpenIDEA's native Commit panel, with an LLM."
 authors = ["qszfy666"]
 license = "Apache-2.0"
 icon = "icon.svg"
 icon-dark = "icon_dark.svg"
-change-notes = "0.5.0 — first marketplace release under the publisher id qszfy666 (earlier ids were never listed, so earlier local installs are a different plugin and can be removed). Signed package, built from this repository against the OpenIDEA SDK at tag v0.1.39."
+change-notes = "0.5.1 — safer prompts and messages: the diff budget keeps both removed and added lines and always reserves room for the “omitted” marker; the model’s answer is validated before it is written (type must be one of the allowed types, no control characters in type/scope/subject, no numbers or arrays where text belongs)."
 categories = ["vcs", "ai"]
 engines.openidea = "^1.3"
 wasm = "dist/plugin.wasm"

@@ -114,7 +114,7 @@ pub fn unwrap_json_text(text: &str) -> String {
 fn text_field(value: &Value, key: &str) -> String {
     match value.get(key) {
         Some(Value::String(text)) => text.clone(),
-        Some(Value::Array(items)) => {
+        Some(Value::Array(items)) if key == "body" => {
             let mut parts = Vec::new();
             for item in items {
                 if let Value::String(text) = item {
@@ -123,15 +123,34 @@ fn text_field(value: &Value, key: &str) -> String {
             }
             parts.join("\n")
         }
-        Some(Value::Null) | None => String::new(),
-        Some(other) => other.to_string(),
+        Some(_) | None => String::new(),
     }
 }
 
 /// Parses the model response into fields. Tolerates reasoning tags, code
 /// fences, arrays in `body`, and (as a last resort) a plain Conventional
 /// Commit line.
-pub fn parse_response(text: &str) -> Option<CommitFields> {
+pub fn parse_response(text: &str, allowed_types: &[String]) -> Option<CommitFields> {
+    let fields = parse_fields(text)?;
+    if fields.commit_type.is_empty()
+        || !allowed_types.contains(&fields.commit_type)
+        || fields
+            .commit_type
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '(' | ')' | ':'))
+        || fields.subject.trim().is_empty()
+        || fields.subject.chars().any(char::is_control)
+        || fields
+            .scope
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '(' | ')'))
+    {
+        return None;
+    }
+    Some(fields)
+}
+
+fn parse_fields(text: &str) -> Option<CommitFields> {
     let unwrapped = unwrap_json_text(text);
     if let (Some(start), Some(end)) = (unwrapped.find('{'), unwrapped.rfind('}'))
         && start < end
@@ -336,7 +355,7 @@ mod tests {
     #[test]
     fn parses_json_with_fences_and_think() {
         let text = "<think>hmm</think>\n```json\n{\"type\":\"fix\",\"scope\":\"\",\"subject\":\"修复空指针\",\"body\":[\"a\",\"b\"],\"changes\":\"\",\"closes\":\"\",\"skipCi\":\"\"}\n```";
-        let fields = parse_response(text).unwrap();
+        let fields = parse_response(text, &["fix".into()]).unwrap();
         assert_eq!(fields.commit_type, "fix");
         assert_eq!(fields.subject, "修复空指针");
         assert_eq!(fields.body, "- a\n- b");
@@ -344,8 +363,11 @@ mod tests {
 
     #[test]
     fn parses_plain_conventional_line() {
-        let fields =
-            parse_response("refactor(core): split the parser\n\nMoves the lexer out.").unwrap();
+        let fields = parse_response(
+            "refactor(core): split the parser\n\nMoves the lexer out.",
+            &["refactor".into()],
+        )
+        .unwrap();
         assert_eq!(fields.commit_type, "refactor");
         assert_eq!(fields.scope, "core");
         assert_eq!(fields.subject, "split the parser");

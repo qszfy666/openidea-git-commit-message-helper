@@ -32,7 +32,7 @@ cargo test
 cargo build --release --target wasm32-wasip2
 mkdir -p dist
 cp target/wasm32-wasip2/release/openidea_plugin_commit_message_helper.wasm dist/plugin.wasm
-openidea-plugin pack . --out dist/qszfy666.commit-message-helper-0.5.0.oiplugin   # 未签名，本地安装用
+openidea-plugin pack . --out dist/qszfy666.commit-message-helper-0.5.1.oiplugin   # 未签名，本地安装用
 ```
 
 然后：
