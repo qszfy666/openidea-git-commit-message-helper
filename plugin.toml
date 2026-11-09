@@ -1,12 +1,12 @@
 id = "qszfy666.commit-message-helper"
 name = "Git Commit Message Helper"
-version = "0.5.2"
+version = "0.5.3"
 description = "Generate a Conventional Commits message for the changes selected in OpenIDEA's native Commit panel, with an LLM."
 authors = ["qszfy666"]
 license = "Apache-2.0"
-icon = "icon.svg"
-icon-dark = "icon_dark.svg"
-change-notes = "0.5.2 — the Test action passes on reasoning models (a 2xx answer whose content is empty because the model spent the tiny probe budget on reasoning now reports HTTP 200 and the model); Max response tokens defaults to 64000 instead of 4096, so reasoning no longer eats the budget; the “no API key” hint names where the key lives (Settings › Plugins › Installed › Secrets)."
+icon = "icons/icon.svg"
+icon-dark = "icons/icon_dark.svg"
+change-notes = "0.5.3 — the plugin icon moved from the repository root to `icons/`. The IDE shows the same glyph, and Paseo, whose project-icon search looks for a root `icon.svg`/`logo.svg`, no longer mistakes it for this repository's logo."
 categories = ["vcs", "ai"]
 engines.openidea = "^1.3"
 wasm = "dist/plugin.wasm"

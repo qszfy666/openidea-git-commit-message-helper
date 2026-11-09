@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.3
+
+- The plugin icon moved from the repository root to `icons/` (`icon = "icons/icon.svg"`, `icon-dark = "icons/icon_dark.svg"`), the layout OpenIDEA's own plugins use. The IDE still shows the same glyph in Settings › Plugins and on the Commit-panel button; nothing about the plugin changes. The move stops other tools from reading the icon as this repository's logo: Paseo derives a project's sidebar icon from a known filename set (`icon.svg`, `favicon.svg`, `logo.png`, …) in the project root and showed the sparkles instead of the first-letter placeholder.
+
 ## 0.5.2
 
 - **Max response tokens** now defaults to 64000 (was 4096): enough for a reasoning model to finish thinking and still write the answer, and within what Anthropic models accept. The setting still takes 256‑128000, so a gateway that allows more can be raised.
