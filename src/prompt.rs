@@ -467,23 +467,35 @@ fn normalize_identifier(value: &str) -> String {
 
 /// One reference per issue, without the `Closes` prefix the template adds.
 fn normalize_closes(closes: &str) -> String {
-    let text = strip_label(
-        closes,
-        &[
-            "closes:",
-            "closes ",
-            "fixes:",
-            "fixes ",
-            "resolves:",
-            "resolves ",
-            "refs:",
-            "refs ",
-        ],
-    );
+    // Each reference may be written with its own label ("Closes #12, closes #13");
+    // drop every label token, not just the one at the start, then de-duplicate.
+    const LABELS: [&str; 8] = [
+        "closes:",
+        "closes",
+        "fixes:",
+        "fixes",
+        "resolves:",
+        "resolves",
+        "refs:",
+        "refs",
+    ];
     let mut seen: Vec<&str> = Vec::new();
-    for token in text.split(|c: char| c == ',' || c.is_whitespace()) {
+    for token in closes.split(|c: char| c == ',' || c.is_whitespace()) {
         let token = token.trim();
-        if !token.is_empty() && !seen.contains(&token) {
+        if token.is_empty() {
+            continue;
+        }
+        // A bare label goes; a label glued to its reference ("Closes:#12")
+        // leaves the reference. The labels are ASCII, so the byte offset holds.
+        let lower = token.to_ascii_lowercase();
+        let token = LABELS
+            .iter()
+            .find(|label| lower == **label || (label.ends_with(':') && lower.starts_with(**label)))
+            .map_or(token, |label| &token[label.len()..]);
+        if token.is_empty() {
+            continue;
+        }
+        if !seen.contains(&token) {
             seen.push(token);
         }
     }
@@ -930,6 +942,32 @@ mod tests {
             render(&fields),
             "fix(core): fix the empty queue\n\nBREAKING CHANGE: the old queue API is gone\n\nCloses #12, #13\n\n[skip ci]"
         );
+    }
+
+    #[test]
+    fn normalize_strips_a_label_on_every_reference() {
+        // Regression: "Closes #12, Closes #12" used to keep the second label as
+        // a reference ("Closes #12, Closes"). Every label token must go, and the
+        // duplicate reference collapses.
+        let fields = parse_response(
+            r#"{"type":"fix","subject":"guard the queue","closes":"Closes #12, Closes #12"}"#,
+            &["fix".into()],
+        )
+        .expect("it parses");
+        assert_eq!(fields.closes, "#12");
+        assert_eq!(render(&fields), "fix: guard the queue\n\nCloses #12");
+    }
+
+    #[test]
+    fn normalize_strips_a_label_written_without_a_space() {
+        // The 0.8.0 single-prefix rule turned "Closes:#12" into "#12"; dropping
+        // whole label tokens must not lose that.
+        let fields = parse_response(
+            r#"{"type":"fix","subject":"guard the queue","closes":"Closes:#12, fixes:#13"}"#,
+            &["fix".into()],
+        )
+        .expect("it parses");
+        assert_eq!(fields.closes, "#12, #13");
     }
 
     #[test]
