@@ -69,7 +69,7 @@
   "Show the Generate with Requirements button": "显示「按补充要求生成」按钮",
   "Show the Format button": "显示「格式化」按钮",
   "Show the Edit Fields button": "显示「编辑字段」按钮",
-  "Opens the Commit Message Editor tool window.": "打开「提交信息编辑器」工具窗口。",
+  "Opens a list of the commit fields; each field is edited in its own dialog.": "打开提交信息字段列表，每个字段在各自的弹框中编辑。",
   "Provider preset": "服务商预设",
   "Provider": "服务商",
   "API protocol": "API 协议",

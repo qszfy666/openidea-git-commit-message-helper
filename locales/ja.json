@@ -91,7 +91,7 @@
   "Whether the editor starts with the marker ticked.": "エディターを開いたときにマーカーをオンにしておくかどうか。",
   "The four buttons above the commit message. A hidden button is removed from the toolbar; the command stays available in Find Action.": "コミットメッセージ上部の 4 つのボタン。非表示にしたボタンはツールバーから消えますが、コマンドは Find Action から引き続き実行できます。",
   "Buttons": "ボタン",
-  "Opens the Commit Message Editor tool window.": "コミットメッセージ エディターのツール ウィンドウを開きます。",
+  "Opens a list of the commit fields; each field is edited in its own dialog.": "コミットメッセージの項目一覧を開きます。各項目はそれぞれのダイアログで編集します。",
   "auto follows the provider.": "auto はプロバイダーに従います。",
   "Blank uses the provider preset.": "空欄の場合はプロバイダーのプリセットを使います。",
   "Blank uses the provider default.": "空欄の場合はプロバイダーの既定値を使います。",

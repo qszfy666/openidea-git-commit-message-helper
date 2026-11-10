@@ -208,7 +208,7 @@
     "actionManual": {
       "type": "boolean",
       "title": "Show the Edit Fields button",
-      "description": "Opens the Commit Message Editor tool window.",
+      "description": "Opens a list of the commit fields; each field is edited in its own dialog.",
       "group": "Buttons",
       "default": true
     }
