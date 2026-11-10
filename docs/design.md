@@ -177,6 +177,6 @@ Commit Templates 页的 **Preview** 用 `pick_many` 选择哪些示例字段有�
 - `cargo test`：127 个单元测试（配置、命名档案与项目默认回退、字段规范化与断句、质量判据、自由文本语言与四语言文案、编辑器渲染/写回/显隐/排序/预设、按项目草稿、动作显隐与事件、兼容缓存命中与分片、CommitDraft 上下文、历史标题与受限项目降级、diff 裁剪、三种任务的 prompt、解析/模板渲染与错误回退、模板预览/帮助/恢复、思考等级与预设模板、映射校验与等级收敛、token budget 解析与拒绝、三种协议响应解析、密钥槽、模型列表、兼容重试、请求诊断、生成并写回提交信息、中文文案引用设置页译名、LLM 错误按界面语言输出且各语言占位符一致）；另有 1 个集成测试（`tests/locales.rs`）核对三份词条覆盖 manifest 与设置 schema 中的全部显示文本。
 - `cargo fmt --all --check`、`cargo clippy --all-targets -- -D warnings`。
 - `cargo build --release --target wasm32-wasip2`。
-- `openidea-plugin check .`（用 OpenIDEA 0.1.40 构建的 CLI）：manifest（含视图、四个按钮的 `when`、`activation`）、贡献点、能力、`locales/*.json` 词条格式与 wasm 组件全部通过，组件被识别为插件 API 1.4。
+- `openidea-plugin check .`（用 OpenIDEA 0.1.40 构建的 CLI）：manifest（含四个按钮的 `when`、`activation`）、贡献点、能力、`locales/*.json` 词条格式与 wasm 组件全部通过，组件被识别为插件 API 1.4。
 - 另以宿主真实 React 控件验证了类型与 Skip CI 下拉显示更新、复选框勾选/取消，并以当前 manifest 核对 Find Action 和快捷键条件，2 项隔离检查通过。
-- 完整桌面界面与真实端点的行为尚未实测：上述验证覆盖 SDK mock host、宿主控件隔离检查与包结构校验；在 OpenIDEA 0.1.40 + 本地 Magpie 或真实服务端点上的四个按钮（含 `when` 生效与图标）、工具窗表单的渲染与字段事件、五个页面动作、字段多选、多行输入框、模型列表选择、日韩文案在设置页的展示，以及各思考预设片段和兼容缓存在真实端点上的表现，仍需人工验证。
+- 正式 OpenIDEA 0.1.40 上的联调结果见 `docs/integration-test-report-0.8.0.md`：生成、按补充要求生成、格式化、参数兼容重试与缓存、提示词档案、提交模板、思考参数和四个按钮图标已用本地 mock 端点实测通过。仍未实测的项列在报告第 6 节，包括字段列表的逐项编辑与写回、五个页面动作、日韩界面语言，以及真实服务端点上的 Models、Request URL、Test 和 50 秒预算超时。

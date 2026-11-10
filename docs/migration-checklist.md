@@ -292,3 +292,16 @@ pnpm build
 - `ui::Strings` 的中文通知改用设置页译名（如「LLM 设置」的「模型」、「思考映射」、「恢复默认」），由测试对照 `zh-CN.json` 校验。
 - `llm.rs` 的 11 条错误改由 `ui::Strings` 按界面语言提供，英文原文不变；服务端消息与响应体原样附加。测试覆盖中文界面下的缺少密钥、HTTP 失败、空 Base URL 与无文本响应，并校验四种语言的占位符一致。
 - 第 47 项改为完成，整体统计调整为 37 项完成、1 项部分完成、9 项未开始。仍为英文的是 SDK 与宿主自身的错误（如未授权网络能力）以及后台任务标题。
+
+
+手动编辑器改为字段列表记录（3、5、7）。
+
+- 上面第三批记录里 3、5、7 的实现入口已过时。正式 0.1.40 无法加载 `form-dialog@1.5` 组件，`3e81ef7` 删掉了 `[[contributes.views]] id = "commit-editor"` 工具窗，改为 `manual` 命令打开 `host::pick` 字段列表，每个字段在自己的单值弹框里编辑，设计见 `docs/modal-editor.md`。
+- 5 的草稿仍存在插件存储里，按当前 Git 仓库区分；关闭字段列表会保留草稿，写回或清空全部字段后删除。
+- 7 改用宿主内置图标 `diff-magic`、`review-comment`、`list`、`edit`，`icons/generate.svg` 和 `icons/manual.svg` 已删除。
+- 三项状态不变。
+
+
+0.8.0 联调修复记录。
+
+- 正式 OpenIDEA 0.1.40 联调发现 `normalize_closes` 只剥掉开头一个标签，`Closes #12, Closes #12` 会渲染成 `Closes #12, Closes`。改为逐词剥掉每个 `Closes`/`Fixes`/`Resolves`/`Refs` 标签，`Closes:#12` 这种不带空格的写法只保留引用。两个回归测试都先因缺陷失败，修复后通过，测试共 129 个单元测试和 1 个词条覆盖测试。
