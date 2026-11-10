@@ -27,6 +27,8 @@ This is an OpenIDEA WebAssembly plugin (Rust SDK, plugin API 1.4). It is inspire
 
 No `git` binary is needed: the IDE supplies the pending commit and its diffs.
 
+Preserving model profiles and commit types across schema upgrades, and the table's **Duplicate** action, require the accompanying OpenIDEA host patch. See the acceptance-fix notes in the [migration checklist](docs/migration-checklist.md) for application and verification instructions.
+
 ## Install
 
 **Settings › Plugins › Available**, search for **Git Commit Message Helper** (published as

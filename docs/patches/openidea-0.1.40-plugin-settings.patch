@@ -1,0 +1,336 @@
+diff --git a/crates/ide-host/src/plugins/api.rs b/crates/ide-host/src/plugins/api.rs
+index 70892f2..da5a3b0 100644
+--- a/crates/ide-host/src/plugins/api.rs
++++ b/crates/ide-host/src/plugins/api.rs
+@@ -2619,7 +2619,7 @@ impl HostApi for PluginApi {
+             .find_map(|i| serde_json::from_value(i.decl.get("properties")?.clone()).ok())?;
+         let setting = schema.into_iter().find(|s| s.key == key)?;
+         let user = self.shared.workspace().map(|w| w.plugin_settings(self.id(), root)).unwrap_or_default();
+-        let value = user.get(key).filter(|v| setting.accepts(v)).cloned().unwrap_or(setting.default);
++        let value = user.get(key).and_then(|value| setting.normalized(value)).unwrap_or(setting.default);
+         serde_json::to_string(&value).ok()
+     }
+ 
+diff --git a/crates/ide-host/src/plugins/ui_points.rs b/crates/ide-host/src/plugins/ui_points.rs
+index b8ca5f9..929e965 100644
+--- a/crates/ide-host/src/plugins/ui_points.rs
++++ b/crates/ide-host/src/plugins/ui_points.rs
+@@ -374,9 +374,59 @@ pub struct SettingSchema {
+     pub items: Option<Box<SettingSchema>>,
+     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+     pub properties: Vec<SettingSchema>,
++    /// Column receiving strings from an explicitly supported older list setting.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub legacy_string_key: Option<String>,
+ }
+ 
+ impl SettingSchema {
++    /// Restores stored rows after schema additions, then applies strict validation.
++    pub fn normalized(&self, value: &Value) -> Option<Value> {
++        let normalized = match self.kind.as_str() {
++            "array" => {
++                let item = self.items.as_ref()?;
++                let rows = match value {
++                    Value::Array(rows) => rows.clone(),
++                    Value::String(text) if self.legacy_string_key.is_some() => text
++                        .split(',')
++                        .map(str::trim)
++                        .filter(|text| !text.is_empty())
++                        .map(|text| Value::String(text.to_owned()))
++                        .collect(),
++                    _ => return None,
++                };
++                if rows.len() > 1000 {
++                    return None;
++                }
++                let mut normalized = Vec::with_capacity(rows.len());
++                for row in rows {
++                    let row = match (&row, &self.legacy_string_key) {
++                        (Value::String(text), Some(key)) => {
++                            let mut object = item.default.as_object()?.clone();
++                            object.insert(key.clone(), Value::String(text.trim().to_owned()));
++                            Value::Object(object)
++                        }
++                        _ => row,
++                    };
++                    normalized.push(item.normalized(&row)?);
++                }
++                Value::Array(normalized)
++            }
++            "object" => {
++                let mut object = value.as_object()?.clone();
++                if object.is_empty() {
++                    return None;
++                }
++                for property in &self.properties {
++                    object.entry(property.key.clone()).or_insert_with(|| property.default.clone());
++                }
++                Value::Object(object)
++            }
++            _ => value.clone(),
++        };
++        self.accepts(&normalized).then_some(normalized)
++    }
++
+     /// Whether `v` is a valid value of this setting.
+     pub fn accepts(&self, v: &Value) -> bool {
+         match self.kind.as_str() {
+@@ -464,9 +514,16 @@ fn setting_at(key: &str, raw: &serde_json::value::RawValue, depth: u8) -> Result
+         options,
+         multiline: o.get("multiline").and_then(Value::as_bool).unwrap_or(false),
+         group: text("group", MAX_TITLE)?,
++        legacy_string_key: text("legacyStringKey", 64)?,
+         items,
+         properties,
+     };
++    if let Some(key) = &s.legacy_string_key {
++        let column = s.items.as_ref().and_then(|item| item.properties.iter().find(|p| p.key == *key));
++        if kind != "array" || column.is_none_or(|column| column.kind != "string") {
++            return Err(format!("setting {key:?}: legacyStringKey must name a string column of an object table"));
++        }
++    }
+     if !s.accepts(&s.default) {
+         return Err(format!("setting {key:?}: the default does not match its type"));
+     }
+@@ -1062,6 +1119,22 @@ mod tests {
+         assert!(!lists[0].accepts(&serde_json::json!([1])));
+     }
+ 
++    #[test]
++    fn legacy_string_columns_are_explicit_and_validated() {
++        for raw in [
++            r#"{"properties":{"rows":{"type":"array","legacyStringKey":"missing","items":{"type":"object","properties":{"name":{"type":"string"}}}}}}"#,
++            r#"{"properties":{"rows":{"type":"array","legacyStringKey":"count","items":{"type":"object","properties":{"count":{"type":"integer"}}}}}}"#,
++            r#"{"properties":{"rows":{"type":"array","legacyStringKey":"name","items":{"type":"string"}}}}"#,
++        ] {
++            assert!(parse_settings_schema(raw).unwrap_err().contains("legacyStringKey"));
++        }
++        let schemas = parse_settings_schema(r#"{"properties":{"rows":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"}}}}}}"#).unwrap();
++        assert!(schemas[0].normalized(&serde_json::json!(["old"])).is_none());
++        assert!(schemas[0].normalized(&serde_json::json!("old,other")).is_none());
++        assert!(schemas[0].normalized(&serde_json::json!([{"name":"old", "unknown":true}])).is_none());
++        assert!(schemas[0].normalized(&Value::Array(vec![serde_json::json!({"name":"old"}); 1001])).is_none());
++    }
++
+     #[test]
+     fn schema_order_is_local_and_duplicate_fields_are_rejected() {
+         let raw = r#"{"properties":{"z":{"type":"string"},"a":{"type":"boolean"}}}"#;
+diff --git a/crates/ide-host/tests/plugins.rs b/crates/ide-host/tests/plugins.rs
+index 749af11..5125f76 100644
+--- a/crates/ide-host/tests/plugins.rs
++++ b/crates/ide-host/tests/plugins.rs
+@@ -6070,3 +6070,47 @@ fn api14_stage3_terminal_calls_are_denied_without_process_grants() {
+     f.host.set_capability("execution", "process:execution-tool", false).unwrap();
+     assert!(f.run("execution", "terminal", None).unwrap_err().contains("not granted"));
+ }
++
++#[test]
++fn settings_upgrade_preserves_old_rows_and_opted_in_string_lists() {
++    let f = fixture(Limits::default());
++    let source = tempfile::tempdir().unwrap();
++    copy_dir(&sample("settings-pages"), source.path());
++    let path = source.path().join("llm.json");
++    let mut schema: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
++    schema["properties"]["profiles"]["legacyStringKey"] = serde_json::json!("name");
++    std::fs::write(&path, serde_json::to_vec(&schema).unwrap()).unwrap();
++    f.install(source.path());
++    for old in [
++        serde_json::json!([{"name":"Existing", "provider":"openai", "model":"custom-model", "baseUrl":"https://example.com/v1"}]),
++        serde_json::json!(["Existing", "Second"]),
++        serde_json::json!("Existing, Second"),
++    ] {
++        f.workspace
++            .settings
++            .lock()
++            .insert("settings-pages".into(), serde_json::json!({"profiles":old}).as_object().unwrap().clone());
++        let result = f.run("settings-pages", "test", None).unwrap().unwrap();
++        let result: serde_json::Value = serde_json::from_str(&result).unwrap();
++        assert_eq!(result["profiles"][0]["name"], "Existing");
++        assert_eq!(result["profiles"][0]["limit"], 2048);
++        assert_eq!(result["profiles"][0]["enabled"], true);
++        if old[0].is_object() {
++            assert_eq!(result["profiles"][0]["model"], "custom-model");
++            assert_eq!(result["profiles"][0]["baseUrl"], "https://example.com/v1");
++        } else {
++            assert_eq!(result["profiles"][1]["name"], "Second");
++        }
++    }
++    for bad in [
++        serde_json::json!([{}]),
++        serde_json::json!([{"name":"Existing", "provider":"unknown"}]),
++        serde_json::json!([{"name":"Existing", "unexpected":true}]),
++    ] {
++        f.workspace
++            .settings
++            .lock()
++            .insert("settings-pages".into(), serde_json::json!({"profiles":bad}).as_object().unwrap().clone());
++        assert!(f.run("settings-pages", "test", None).is_err(), "invalid settings must still fail validation");
++    }
++}
+diff --git a/plugins/README.md b/plugins/README.md
+index 96182e1..6c1fc6d 100644
+--- a/plugins/README.md
++++ b/plugins/README.md
+@@ -1841,7 +1841,18 @@ For a model-profile table, use:
+ ```
+ 
+ Table cells support scalar types, including enums. Rows edit inline; new rows
+-use each column's default. Nested collections are unsupported. Arrays default
++use each column's default. Duplicate copies a row after the original, with the same
++values; rename the copy before selecting it as a named profile. Add and Duplicate
++stop at the 1,000-row limit.
++
++When a schema adds columns, stored rows retain existing values and receive the
++new columns' defaults before strict validation. Unknown columns, invalid values
++and empty malformed rows remain rejected. An object-table array can explicitly
++migrate an older string list with `"legacyStringKey": "title"`, where `title`
++names a string column. String entries become rows using that column and the
++other columns' defaults. The same opt-in accepts an earlier comma-separated
++string setting. Both plugin reads and Settings use the normalized rows; Apply
++saves through the usual settings flow. Nested collections are unsupported. Arrays default
+ to `[]` and contain at most 1,000 entries. A plugin can declare at most 32 pages,
+ 200 settings across pages, and 32 actions per page. Field and table-column order
+ follows the schema; duplicate property keys are rejected, including table columns.
+diff --git a/src/features/plugins/__tests__/settings.test.tsx b/src/features/plugins/__tests__/settings.test.tsx
+index 254d38e..fc392e6 100644
+--- a/src/features/plugins/__tests__/settings.test.tsx
++++ b/src/features/plugins/__tests__/settings.test.tsx
+@@ -278,3 +278,66 @@ it("indexes string-list enum options", () => {
+     "documentation",
+   );
+ });
++
++it("preserves saved profile fields when new columns receive defaults", () => {
++  useProject.setState({
++    settings: { plugins: { "example.helper": { profiles: [{ name: "Existing", enabled: false }] } } } as never,
++  });
++  openSettings();
++  render(<Harness page="llm" />);
++  expect(screen.getByRole("textbox", { name: "Model profiles: Name 1" })).toHaveValue("Existing");
++  expect(screen.getByRole("checkbox", { name: "Model profiles: Enabled 1" })).not.toBeChecked();
++  expect(screen.getByRole("spinbutton", { name: "Model profiles: Token limit 1" })).toHaveValue(5);
++  fireEvent.change(screen.getByRole("spinbutton", { name: "Model profiles: Token limit 1" }), {
++    target: { value: "9" },
++  });
++  expect(stagedValue(useSettingsDialog.getState(), "global", "plugins")).toMatchObject({
++    "example.helper": { profiles: [{ name: "Existing", enabled: false, limit: 9 }] },
++  });
++});
++
++it("duplicates a model profile into an independently editable row", () => {
++  render(<Harness page="llm" />);
++  fireEvent.click(screen.getByRole("button", { name: "Add" }));
++  fireEvent.change(screen.getByRole("textbox", { name: "Model profiles: Name 1" }), {
++    target: { value: "Original" },
++  });
++  fireEvent.change(screen.getByRole("spinbutton", { name: "Model profiles: Token limit 1" }), {
++    target: { value: "42" },
++  });
++  fireEvent.click(screen.getByRole("button", { name: "Duplicate" }));
++  expect(screen.getByRole("textbox", { name: "Model profiles: Name 2" })).toHaveValue("Original");
++  expect(screen.getByRole("spinbutton", { name: "Model profiles: Token limit 2" })).toHaveValue(42);
++  fireEvent.change(screen.getByRole("textbox", { name: "Model profiles: Name 2" }), {
++    target: { value: "Copy" },
++  });
++  expect(screen.getByRole("textbox", { name: "Model profiles: Name 1" })).toHaveValue("Original");
++  expect(stagedValue(useSettingsDialog.getState(), "global", "plugins")).toMatchObject({
++    "example.helper": {
++      profiles: [
++        { name: "Original", enabled: true, limit: 42 },
++        { name: "Copy", enabled: true, limit: 42 },
++      ],
++    },
++  });
++});
++
++it.each([{ stored: ["Legacy", "Other"] }, { stored: "Legacy, Other" }])(
++  "migrates opted-in legacy string profiles: %j",
++  ({ stored }) => {
++    dispose();
++    const migratedProfile = JSON.parse(JSON.stringify(profile));
++    migratedProfile.legacyStringKey = "name";
++    dispose = projectSettings("example.helper", {
++      title: "Helper",
++      properties: [],
++      pages: [{ id: "llm", title: "LLM Settings", properties: [migratedProfile] }],
++    });
++    useProject.setState({ settings: { plugins: { "example.helper": { profiles: stored } } } as never });
++    openSettings();
++    render(<Harness page="llm" />);
++    expect(screen.getByRole("textbox", { name: "Model profiles: Name 1" })).toHaveValue("Legacy");
++    expect(screen.getByRole("textbox", { name: "Model profiles: Name 2" })).toHaveValue("Other");
++    expect(screen.getByRole("spinbutton", { name: "Model profiles: Token limit 1" })).toHaveValue(5);
++  },
++);
+diff --git a/src/features/plugins/settings.tsx b/src/features/plugins/settings.tsx
+index 4cfd87d..78173cd 100644
+--- a/src/features/plugins/settings.tsx
++++ b/src/features/plugins/settings.tsx
+@@ -17,6 +17,7 @@ export interface SettingSchema {
+   group?: string | null;
+   items?: SettingSchema | null;
+   properties?: SettingSchema[];
++  legacyStringKey?: string | null;
+ }
+ interface SettingsAction {
+   title: string;
+@@ -162,6 +163,13 @@ function ArrayControl({ s, value, set }: { s: SettingSchema; value: unknown[]; s
+                       disabled={i === rows.length - 1}
+                       onClick={() => move(i, 1)}
+                     />
++                    <IconButton
++                      size="small"
++                      icon="copy"
++                      title="Duplicate"
++                      disabled={rows.length >= 1000}
++                      onClick={() => set([...rows.slice(0, i + 1), structuredClone(row), ...rows.slice(i + 1)])}
++                    />
+                     <IconButton
+                       size="small"
+                       icon="trash"
+@@ -207,12 +215,34 @@ function accepts(s: SettingSchema, value: unknown): boolean {
+   );
+ }
+ 
++/** Upgrade stored shapes before applying the current schema's strict validation. */
++function normalizedSetting(s: SettingSchema, stored: unknown): unknown {
++  let value = stored;
++  if (s.type === "array" && s.items) {
++    if (typeof value === "string" && s.legacyStringKey)
++      value = value
++        .split(",")
++        .map((item) => item.trim())
++        .filter(Boolean);
++    if (!Array.isArray(value)) return undefined;
++    value = value.map((row) => {
++      if (typeof row === "string" && s.legacyStringKey)
++        row = { ...(s.items!.default as Record<string, unknown>), [s.legacyStringKey]: row.trim() };
++      return normalizedSetting(s.items!, row);
++    });
++  } else if (s.type === "object") {
++    if (!value || typeof value !== "object" || Array.isArray(value) || !Object.keys(value).length) return undefined;
++    value = { ...(s.default as Record<string, unknown>), ...value };
++  }
++  return accepts(s, value) ? value : undefined;
++}
++
+ function SettingControl({ pluginId, s }: { pluginId: string; s: SettingSchema }) {
+   const [invalid, setInvalid] = useState(false);
+   const form = useSettingsForm();
+   const all = form.useValue("plugins") as PluginSettings | undefined;
+   const stored = all?.[pluginId]?.[s.key];
+-  const value = accepts(s, stored) ? stored : s.default;
++  const value = normalizedSetting(s, stored) ?? s.default;
+   return (
+     <div className={styles.field}>
+       {s.type !== "boolean" && <span>{s.title}</span>}
+diff --git a/src/platform/locales/text/en.json b/src/platform/locales/text/en.json
+index 9126c77..e3cd3ff 100644
+--- a/src/platform/locales/text/en.json
++++ b/src/platform/locales/text/en.json
+@@ -1,4 +1,5 @@
+ {
++  "Duplicate": "Duplicate",
+   "Separate Procedures and Functions": "Separate Procedures and Functions",
+   "Shared JDT LS is available only in local ordinary project windows. Select Local machine for the Java language server to use it.": "Shared JDT LS is available only in local ordinary project windows. Select Local machine for the Java language server to use it.",
+   "Share JDT LS across builds": "Share JDT LS across builds",

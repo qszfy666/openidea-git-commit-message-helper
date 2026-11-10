@@ -203,3 +203,43 @@
 边界与未完成项：38（思考参数被 4xx 明确拒绝后的兼容重试）和 39（兼容结果缓存）不在第二批，服务端拒绝思考字段时直接报告失败；首次请求与既有兼容重试仍共享 50 秒预算，本批没有新增请求路径。完整 Velocity 兼容（46）、手动结构化编辑器（3–7、16–18）与质量/语言条目仍在第三批或按需评估。
 
 共同回归入口（原生提交选择、三种协议、secret、`revision` 写回保护）继续有测试覆盖，单元测试从 70 个增加到 93 个。界面与真实端点行为仍需实测：五个新页面动作、字段多选、多行输入框和真实服务端点对各预设片段的接受情况，目前只有 SDK mock host 的行为验证与包结构校验。
+
+
+验收修复记录（基于 0.7.1）。
+
+| 验收问题 | 修复位置与行为 |
+| --- | --- |
+| 连接测试的思考预算大于响应上限 | 预算型思考探针使用活动档案的响应上限，并按实际请求上限解析预算，其他探针继续使用 16 token |
+| 空模板清空草稿 | 空白或条件段展开后为空的结果被判为模板错误，生成流程回退内置 Default，并显示原因 |
+| 点号键绕过预算占位符位置校验 | 校验真实 JSON 路径片段，拒绝字面点号键、空键及数组构成的伪路径 |
+| 升级后旧模型档案和提交类型被忽略 | 宿主先补齐旧行缺少的列，再执行原有严格校验；`legacyStringKey` 显式指定旧字符串列表填入的列 |
+| 模型档案缺少复制入口 | 宿主表格新增 Duplicate，复制后可改名及独立编辑，保留原行，并遵守 1000 行上限 |
+
+配置升级与档案复制由宿主补丁提供。插件代码与 schema 已配合修复，现有发布版 OpenIDEA 0.1.40 需应用该补丁后才能获得这两项行为。
+
+宿主源码基线为 OpenIDEA `v0.1.40`，补丁位于 [patches/openidea-0.1.40-plugin-settings.patch](patches/openidea-0.1.40-plugin-settings.patch)。在该版本宿主源码目录中检查并应用，路径替换为本仓库的绝对路径。
+
+```sh
+git apply --check /path/to/git-commit-message-helper/docs/patches/openidea-0.1.40-plugin-settings.patch
+git apply /path/to/git-commit-message-helper/docs/patches/openidea-0.1.40-plugin-settings.patch
+```
+
+宿主的迁移在读取和编辑时构造规范值，原有设置文件由正常 Apply 流程保存。已有字段不会被默认值覆盖，未知字段、错误类型、非法枚举和超量行继续由严格校验拒绝。`legacyStringKey` 仅用于字符串列表到对象表格的显式迁移，同时支持早期逗号分隔字符串，当前提交类型将其设置为 `title`。
+
+
+修复验证记录。
+
+- 插件新增三项回归测试，均先因目标缺陷失败，再通过修复；当前 96 个测试、格式检查、Clippy、WASM 构建与插件包检查通过。
+- 宿主真实 WASM 升级测试先出现“Add a model profile before testing”，修复后通过。设置相关三个集成测试及九个 schema/UI 贡献点单元测试通过，覆盖正常读取、默认补列、显式旧字符串迁移和非法数据拒绝。
+- 宿主前端 21 个设置组件测试通过，完整类型检查、前端构建与 Safari 16 启动兼容检查通过。实际 React 设置组件在浏览器隔离页完成复制、改名与原行保留验证，并留存前后截图。该验证覆盖设置组件，完整桌面进程及真实 LLM 端点仍待实测。
+- 宿主 Clippy 命令 `cargo +1.96.0 clippy -p ide-host --all-targets --offline -- -D warnings` 被 v0.1.40 原有的三处 `nonminimal_bool` 告警阻断，位置为 `crates/ide-db/src/clickhouse.rs:290`、`crates/ide-db/src/split.rs:159`、`crates/ide-lsp/src/launch.rs:179`。这些文件与原始源码逐字节一致。
+
+在打过补丁的宿主源码中重跑相关检查。
+
+```sh
+cargo +1.96.0 test -p ide-host --lib plugins::ui_points::tests
+cargo +1.96.0 test -p ide-host --test plugins settings
+pnpm vitest run src/features/plugins/__tests__/settings.test.tsx
+pnpm typecheck
+pnpm build
+```

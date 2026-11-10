@@ -1572,6 +1572,73 @@ mod tests {
         assert!(notice.body.contains("LOW"), "{}", notice.body);
     }
 
+    #[test]
+    fn a_connection_test_keeps_the_profiles_valid_thinking_budget() {
+        for (preset, mapping) in [
+            ("anthropic-budget", None),
+            ("auto", None),
+            (
+                "custom",
+                Some(r#"{"HIGH":{"thinking":{"type":"enabled","budget_tokens":48000}}}"#),
+            ),
+        ] {
+            let host = MockHost::install().with_capabilities(&["secrets", "net:api.anthropic.com"]);
+            host.set_secret("api-key", "test-key");
+            host.set_setting("provider", "\"Anthropic\"");
+            host.set_setting("thinkingLevel", "\"HIGH\"");
+            host.set_setting("thinkingPreset", &serde_json::to_string(preset).unwrap());
+            if let Some(mapping) = mapping {
+                host.set_setting("thinkingMapping", &serde_json::to_string(mapping).unwrap());
+            }
+            host.on_fetch(|request| {
+                let body: serde_json::Value =
+                    serde_json::from_slice(request.body.as_deref().unwrap()).unwrap();
+                assert_eq!(body["thinking"]["budget_tokens"], 48_000, "{body}");
+                assert_eq!(body["max_tokens"], 64_000, "{body}");
+                Ok(HttpResponse {
+                    status: 200,
+                    headers: Vec::new(),
+                    body: br#"{"content":[]}"#.to_vec(),
+                })
+            });
+
+            let result = CommitMessageHelper.run_command("test", &host.invocation(), None);
+            assert!(result.is_ok(), "{preset}: {result:?}");
+        }
+    }
+
+    #[test]
+    fn an_empty_template_result_falls_back_to_a_generated_message() {
+        for template in ["", " \n", "{{#closes}}{{closes}}{{/closes}}"] {
+            let host = MockHost::install().with_capabilities(&[
+                "vcs.read",
+                "vcs.write",
+                "secrets",
+                "net:api.deepseek.com",
+            ]);
+            host.set_secret("api-key", "test-key");
+            host.set_setting(
+                "templates",
+                &serde_json::json!([{"name": "Team", "template": template}]).to_string(),
+            );
+            host.set_setting("defaultTemplate", "\"Team\"");
+            host.set_commit_draft(Some(draft()));
+            host.on_fetch(|_| {
+                Ok(HttpResponse {
+                    status: 200,
+                    headers: Vec::new(),
+                    body: br#"{"choices":[{"message":{"content":"{\"type\":\"fix\",\"subject\":\"fix crash\"}"}}]}"#.to_vec(),
+                })
+            });
+
+            let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+            assert!(result.is_ok(), "{result:?}");
+            assert_eq!(host.commit_draft().unwrap().message, "fix: fix crash");
+            let shown = host.notifications();
+            assert!(shown.last().unwrap().body.contains("Invalid template"));
+        }
+    }
+
     /// Checklist 12: Restore Default hands the built-in template to the user,
     /// because a plugin cannot write the declarative settings.
     #[test]

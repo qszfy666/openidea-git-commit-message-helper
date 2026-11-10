@@ -27,6 +27,8 @@
 
 不需要 `git` 命令：待提交内容和 diff 由 IDE 提供。
 
+从旧版本升级时保留模型档案、提交类型，以及表格里的 **Duplicate** 操作，需要应用随仓库提供的 OpenIDEA 宿主补丁。应用与验证说明见[迁移清单的验收修复记录](docs/migration-checklist.md)。
+
 ## 安装
 
 **Settings › Plugins › Available** 里搜索 **Git Commit Message Helper**（市场 id：`qszfy666.commit-message-helper`，通过[社区 registry](https://github.com/l0ng-ai/openidea-plugins) 收录），安装并按提示授予能力。

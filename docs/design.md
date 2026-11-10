@@ -67,7 +67,7 @@ Base URL 留空时使用 provider 预设；有路径时直接追加协议后缀�
 
 ### 4.2 命名档案与项目默认（0.7.0）
 
-三种档案都用声明式表格（`array` of `object`）保存，单元格只支持标量，长文本列声明 `multiline` 后由宿主渲染为多行输入框。插件对设置只读，所以档案的新建、改名、编辑、复制、删除与排序都由 IDE 设置界面完成。
+三种档案都用声明式表格（`array` of `object`）保存，单元格只支持标量，长文本列声明 `multiline` 后由宿主渲染为多行输入框。插件对设置只读，所以档案的新建、改名、编辑、复制、删除与排序都由 IDE 设置界面完成。复制操作与旧表格数据升级需要应用随仓库提供的 [OpenIDEA 宿主补丁](patches/openidea-0.1.40-plugin-settings.patch)，应用说明见迁移清单的验收修复记录。
 
 | 档案 | 表格键 | 选择键 | 未选择时的回退 |
 | --- | --- | --- | --- |
@@ -102,6 +102,8 @@ Base URL 留空时使用 provider 预设；有路径时直接追加协议后缀�
 预设是一个按等级名作键的 JSON 对象，每个值是一段请求体片段，生成请求时合并到顶层字段。`auto` 按档案协议选标准参数（Chat Completions 用 `reasoning_effort`，Responses 用 `reasoning.effort`，Anthropic 用 `thinking` 对象加预算占位符）；其余预设对应 `reasoning_effort`、嵌套 effort、`thinking` 开关、`enable_thinking` 布尔值、Anthropic budget / adaptive 等参数族。`auto` 的 `MAX` 映射为 `high`，需要 `max` / `xhigh` 的网关写自定义映射。这里不做参考项目按供应商名猜测参数族的启发式：映射是请求片段，不是能力探测。
 
 `thinkingMapping` 列非空时覆盖预设模板，清空即恢复。进入处校验 JSON 对象、等级名、隐式 `DEFAULT`、空片段、null、保留请求字段（`model`、`messages`、`temperature`、各 token 字段等）、`$thinking_budget` 只能出现在 `thinking.budget_tokens`、嵌套不超过 12 层、大小不超过 64 KiB。`thinking.budget_tokens` 的占位符按等级占响应上限的 25/50/75/90%，预留 256 token 给答案；显式数字需不小于 1024 且小于上限，上限不足时该等级不可用。
+
+占位符位置按真实 JSON 路径片段判断。预算型思考的 **Test** 使用活动档案的响应上限，与生成时发送的预算一致；其他连接探针使用 16 token。模板渲染结果为空或只有空白时，生成流程会回退内置 Default 并报告模板错误。
 
 声明式表格的 enum 无法条件化，因此 **Thinking Levels** 动作显示映射实际提供的等级；插件在解析时收敛：等级没有映射、映射无效或 budget 不通过时按 Model default 发送，并在诊断里写明原因。请求诊断也显示实际发送的片段或未发送的原因。被服务端明确拒绝思考字段时直接报告失败，移除重试（第 38 项）和拒绝结果缓存（第 39 项）不在本批。
 

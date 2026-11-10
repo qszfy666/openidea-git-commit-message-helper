@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Budgeted thinking connection tests use the profile's response limit, keeping `thinking.budget_tokens` below the actual request limit. Other probes retain the 16-token limit.
+- Empty or whitespace-only template results fall back to the built-in Default and report the template error, preserving a nonempty generated message.
+- Thinking placeholders are checked by JSON path segments, so literal dotted keys cannot masquerade as nested budget fields.
+- The accompanying OpenIDEA 0.1.40 host patch restores old settings before strict validation and adds a Duplicate action to settings tables. The commit-type schema opts into legacy string-list migration through `legacyStringKey`.
+
 ## 0.7.1
 
 迁移清单第二批的子批次 2（11、12、24–28）：模板预览与帮助、思考等级与参数映射。仍需要 OpenIDEA 0.1.40（插件 API 1.4），已有配置无需迁移。

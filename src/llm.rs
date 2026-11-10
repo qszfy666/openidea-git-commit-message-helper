@@ -335,9 +335,7 @@ fn send(config: &Config, system: &str, user: &str, max_tokens: u32) -> Result<An
     let url = endpoint(config)?;
     let started = Instant::now();
     let mut shape = RequestShape::for_config(config);
-    // The budget is the profile's response limit, not the smaller probe used
-    // by the connection test.
-    let resolution = thinking::resolve(&config.thinking, config.protocol, config.max_tokens);
+    let resolution = thinking::resolve(&config.thinking, config.protocol, max_tokens);
     let mut adjusted: Vec<&'static str> = Vec::new();
     let mut attempts = 0;
     let mut last_failure = String::new();
@@ -406,7 +404,21 @@ pub fn generate(config: &Config, system: &str, user: &str) -> Result<Answer, Err
 pub fn test(config: &Config) -> Result<Answer, Error> {
     ensure_ready(config)?;
     ensure_model(config)?;
-    let answer = send(config, "You are a connection test.", "ping", TEST_TOKENS)?;
+    let thinking = thinking::resolve(&config.thinking, config.protocol, config.max_tokens);
+    let has_budget = thinking
+        .fragment
+        .as_ref()
+        .and_then(|fragment| fragment.get("thinking"))
+        .and_then(|fragment| fragment.get("budget_tokens"))
+        .is_some();
+    // A budgeted thinking request must keep the profile's response limit so
+    // the probe tests the configured fragment with a valid token budget.
+    let max_tokens = if has_budget {
+        config.max_tokens
+    } else {
+        TEST_TOKENS
+    };
+    let answer = send(config, "You are a connection test.", "ping", max_tokens)?;
     // A 2xx proves the endpoint, key and model; the body only has to be JSON.
     // The content is not checked: a reasoning model given the 16-token budget
     // answers `content: null` with `finish_reason: "length"`, which is a

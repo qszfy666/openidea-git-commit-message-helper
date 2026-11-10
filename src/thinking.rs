@@ -360,45 +360,47 @@ pub fn validate(text: &str) -> Result<Value, String> {
                 ));
             }
         }
-        check_fragment(fragment, 0, "")?;
+        check_fragment(fragment, 0, &[])?;
     }
     Ok(value)
 }
 
 /// Rejects null values, invalid placeholders and nesting beyond the limit.
-fn check_fragment(value: &Value, depth: usize, path: &str) -> Result<(), String> {
+fn check_fragment(value: &Value, depth: usize, path: &[&str]) -> Result<(), String> {
     if depth > MAX_JSON_DEPTH {
         return Err(format!(
-            "Mapping nesting depth exceeds {MAX_JSON_DEPTH} levels at '{path}'."
+            "Mapping nesting depth exceeds {MAX_JSON_DEPTH} levels at '{}'.",
+            path.join(".")
         ));
     }
     match value {
         Value::Null => Err(format!(
-            "null parameter values are not allowed (at '{path}')."
+            "null parameter values are not allowed (at '{}').",
+            path.join(".")
         )),
         Value::String(text) if text.starts_with('$') => {
-            if text == BUDGET_PLACEHOLDER && path == "thinking.budget_tokens" {
+            if text == BUDGET_PLACEHOLDER && path == ["thinking", "budget_tokens"] {
                 Ok(())
             } else {
                 Err(format!(
-                    "The {BUDGET_PLACEHOLDER} placeholder is only valid at thinking.budget_tokens (found at '{path}')."
+                    "The {BUDGET_PLACEHOLDER} placeholder is only valid at thinking.budget_tokens (found at '{}').",
+                    path.join(".")
                 ))
             }
         }
         Value::Object(map) => {
             for (key, child) in map {
-                let child_path = if path.is_empty() {
-                    key.clone()
-                } else {
-                    format!("{path}.{key}")
-                };
+                let mut child_path = path.to_vec();
+                child_path.push(key);
                 check_fragment(child, depth + 1, &child_path)?;
             }
             Ok(())
         }
         Value::Array(items) => {
+            let mut child_path = path.to_vec();
+            child_path.push("[]");
             for child in items {
-                check_fragment(child, depth + 1, &format!("{path}[]"))?;
+                check_fragment(child, depth + 1, &child_path)?;
             }
             Ok(())
         }
@@ -567,6 +569,21 @@ mod tests {
             "{}",
             mapping_text(&preset, Protocol::OpenAiChat)
         );
+    }
+
+    #[test]
+    fn validation_rejects_placeholder_keys_that_only_look_like_nested_paths() {
+        for mapping in [
+            r#"{"HIGH":{"thinking.budget_tokens":"$thinking_budget"}}"#,
+            r#"{"HIGH":{"":{"thinking.budget_tokens":"$thinking_budget"}}}"#,
+            r#"{"HIGH":{"thinking":[{"budget_tokens":"$thinking_budget"}]}}"#,
+        ] {
+            let error = validate(mapping).expect_err("the placeholder has no valid budget path");
+            assert!(
+                error.contains("only valid at thinking.budget_tokens"),
+                "{error}"
+            );
+        }
     }
 
     #[test]

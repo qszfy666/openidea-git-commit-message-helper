@@ -20,6 +20,7 @@
       "title": "Allowed commit types",
       "description": "Title is the value the model must return; description explains when to pick it and is included in the prompt. Older string-only lists are still accepted.",
       "group": "Types",
+      "legacyStringKey": "title",
       "items": {
         "type": "object",
         "properties": {

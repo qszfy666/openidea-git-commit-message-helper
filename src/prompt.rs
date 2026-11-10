@@ -445,6 +445,9 @@ pub fn render_template(fields: &CommitFields, template: &str) -> Result<String, 
     if let Some((open, _)) = block {
         return Err(format!("section '{open}' is never closed"));
     }
+    if out.trim().is_empty() {
+        return Err("the template produced an empty commit message".to_owned());
+    }
     Ok(out.trim_end().to_owned())
 }
 
