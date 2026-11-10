@@ -1,12 +1,12 @@
 id = "qszfy666.commit-message-helper"
 name = "Git Commit Message Helper"
-version = "0.6.0"
+version = "0.7.0"
 description = "Generate a Conventional Commits message for the changes selected in OpenIDEA's native Commit panel, with an LLM."
 authors = ["qszfy666"]
 license = "Apache-2.0"
 icon = "icons/icon.svg"
 icon-dark = "icons/icon_dark.svg"
-change-notes = "0.6.0 — the commit message toolbar gains \"Generate with Requirements\" and \"Format Draft\"; the last commits of the repository are read as a style reference; a model that rejects `max_tokens` or `temperature` is retried without that parameter, and the result reports what was sent; the LLM Settings page lists the endpoint's models and previews the request URL. Needs OpenIDEA 0.1.40 (plugin API 1.4)."
+change-notes = "0.7.0 — configuration becomes reusable: named model profiles with their own token limit and key slot, named prompt profiles, named output templates with conditional sections, commit type descriptions, and a project-level default choice for each. Existing single settings keep working. Needs OpenIDEA 0.1.40 (plugin API 1.4)."
 categories = ["vcs", "ai"]
 engines.openidea = "^1.4"
 wasm = "dist/plugin.wasm"
@@ -113,6 +113,11 @@ title = "Prompts"
 schema = "settings/prompts.json"
 
 [[contributes.settings.pages]]
+id = "templates"
+title = "Commit Templates"
+schema = "settings/templates.json"
+
+[[contributes.settings.pages]]
 id = "llm"
 title = "LLM Settings"
 schema = "settings/llm.json"
@@ -129,7 +134,24 @@ command = "models"
 title = "Request URL"
 command = "endpoint"
 
+# Four fixed key slots: model profiles pick one of them. Secrets must be
+# declared here, so a profile can only reference a slot listed in this manifest.
 [[contributes.secrets]]
 name = "api-key"
 label = "LLM API key"
-description = "Sent only to the endpoint you configure. Kept in the system keychain."
+description = "Default key slot. Sent only to the endpoint you configure. Kept in the system keychain."
+
+[[contributes.secrets]]
+name = "api-key-2"
+label = "LLM API key (slot 2)"
+description = "Optional second key slot for a model profile. Kept in the system keychain."
+
+[[contributes.secrets]]
+name = "api-key-3"
+label = "LLM API key (slot 3)"
+description = "Optional third key slot for a model profile. Kept in the system keychain."
+
+[[contributes.secrets]]
+name = "api-key-4"
+label = "LLM API key (slot 4)"
+description = "Optional fourth key slot for a model profile. Kept in the system keychain."

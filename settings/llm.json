@@ -64,6 +64,67 @@
       "title": "Max response tokens",
       "group": "Sampling",
       "default": 64000
+    },
+    "modelProfiles": {
+      "type": "array",
+      "title": "Model profiles",
+      "description": "Named connection settings. Add, rename, edit, copy and remove rows here. One profile is active at a time; a blank Active model keeps using the single settings above. Every profile has its own token limit and key slot. Keys are plugin secrets under Settings > Plugins > Secrets, never text in this table.",
+      "group": "Profiles",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "title": "Name", "default": "" },
+          "provider": {
+            "type": "string",
+            "title": "Provider",
+            "enum": [
+              "OpenAI",
+              "Anthropic",
+              "DeepSeek",
+              "Qwen",
+              "Kimi",
+              "GLM",
+              "MiniMax",
+              "SiliconFlow",
+              "Volcengine",
+              "Azure OpenAI",
+              "OpenRouter",
+              "Groq",
+              "Mistral",
+              "Ollama",
+              "Magpie",
+              "Custom"
+            ],
+            "default": "DeepSeek"
+          },
+          "protocol": {
+            "type": "string",
+            "title": "Protocol",
+            "enum": ["auto", "openai-chat", "openai-responses", "anthropic"],
+            "default": "auto"
+          },
+          "baseUrl": { "type": "string", "title": "Base URL", "default": "" },
+          "model": { "type": "string", "title": "Model", "default": "" },
+          "temperature": { "type": "number", "title": "Temperature", "default": 0.5 },
+          "sendTemperature": { "type": "boolean", "title": "Send temperature", "default": true },
+          "maxTokens": { "type": "integer", "title": "Max response tokens", "default": 64000 },
+          "secretSlot": {
+            "type": "string",
+            "title": "Key slot",
+            "enum": ["api-key", "api-key-2", "api-key-3", "api-key-4"],
+            "description": "Which declared plugin secret this profile sends. Fill each slot under Settings > Plugins > Secrets.",
+            "default": "api-key"
+          }
+        }
+      },
+      "default": []
+    },
+    "activeModel": {
+      "type": "string",
+      "title": "Active model profile",
+      "description": "Name of the model profile to use. Blank uses the single settings above. This Project value overrides the Global one; leave it blank in a project to inherit the global choice.",
+      "group": "Profiles",
+      "default": ""
     }
   }
 }

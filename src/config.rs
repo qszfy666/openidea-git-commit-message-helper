@@ -165,30 +165,70 @@ impl Provider {
     }
 }
 
-const DEFAULT_TYPES: &str = "feat,fix,docs,style,refactor,perf,test,build,ci,chore,revert";
-
-fn default_commit_types() -> Vec<String> {
-    DEFAULT_TYPES.split(',').map(ToOwned::to_owned).collect()
+/// One allowed commit type: `title` is what the model must return,
+/// `description` explains when to choose it (settings table and prompt).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommitType {
+    pub title: String,
+    pub description: String,
 }
 
-/// The settings page stores `commitTypes` as a string array; older settings
-/// files used one comma-separated string, so both forms are accepted.
-fn commit_types() -> Vec<String> {
+fn commit_type(title: &str, description: &str) -> CommitType {
+    CommitType {
+        title: title.trim().to_owned(),
+        description: description.trim().to_owned(),
+    }
+}
+
+fn default_commit_types() -> Vec<CommitType> {
+    [
+        ("feat", "A new feature"),
+        ("fix", "A bug fix"),
+        ("docs", "Documentation only"),
+        ("style", "Formatting or style, no behaviour change"),
+        (
+            "refactor",
+            "Code change that neither fixes a bug nor adds a feature",
+        ),
+        ("perf", "Performance improvement"),
+        ("test", "Tests only"),
+        ("build", "Build system or dependencies"),
+        ("ci", "CI configuration"),
+        ("chore", "Maintenance tasks"),
+        ("revert", "Reverts an earlier commit"),
+    ]
+    .into_iter()
+    .map(|(title, description)| commit_type(title, description))
+    .collect()
+}
+
+/// `commitTypes` is a table of title/description objects. Settings saved by
+/// 0.6.x used a string array, older ones one comma-separated string; both are
+/// still accepted, with an empty description.
+fn commit_types() -> Vec<CommitType> {
     let Some(raw) = host::setting("commitTypes") else {
         return default_commit_types();
     };
     let value: Value = serde_json::from_str(&raw).unwrap_or(Value::String(raw));
-    let types: Vec<String> = match value {
+    let types: Vec<CommitType> = match value {
         Value::Array(items) => items
             .into_iter()
-            .filter_map(|item| item.as_str().map(str::trim).map(ToOwned::to_owned))
-            .filter(|item| !item.is_empty())
+            .filter_map(|item| match item {
+                Value::String(title) => Some(commit_type(&title, "")),
+                Value::Object(_) => Some(commit_type(
+                    item.get("title").and_then(Value::as_str).unwrap_or(""),
+                    item.get("description")
+                        .and_then(Value::as_str)
+                        .unwrap_or(""),
+                )),
+                _ => None,
+            })
+            .filter(|item| !item.title.is_empty())
             .collect(),
         Value::String(text) => text
             .split(',')
-            .map(str::trim)
-            .filter(|item| !item.is_empty())
-            .map(ToOwned::to_owned)
+            .map(|title| commit_type(title, ""))
+            .filter(|item| !item.title.is_empty())
             .collect(),
         _ => Vec::new(),
     };
@@ -199,8 +239,70 @@ fn commit_types() -> Vec<String> {
     }
 }
 
+/// Reads a declarative table setting. The IDE saves each row as a complete
+/// object; rows of an unexpected shape are ignored by the callers.
+fn setting_json(key: &str) -> Option<Value> {
+    host::setting(key).and_then(|raw| serde_json::from_str(&raw).ok())
+}
+
+/// The row of a named-profile table selected by its selector setting. A blank
+/// selector leaves the single settings in charge; a name no row has also does.
+fn selected(key: &str, selector: &str) -> Option<Value> {
+    let name = host::setting_string(selector)?;
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let Value::Array(items) = setting_json(key)? else {
+        return None;
+    };
+    items.into_iter().find(|item| {
+        item.get("name")
+            .and_then(Value::as_str)
+            .is_some_and(|candidate| candidate.trim() == name)
+    })
+}
+
+/// A field of the active profile, or the single setting with the same key.
+fn profile_text(profile: Option<&Value>, key: &str) -> Option<String> {
+    profile
+        .and_then(|value| value.get(key))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| host::setting_string(key))
+}
+
+fn profile_number(profile: Option<&Value>, key: &str) -> Option<f64> {
+    profile
+        .and_then(|value| value.get(key))
+        .and_then(Value::as_f64)
+        .or_else(|| host::setting_number(key))
+}
+
+fn profile_bool(profile: Option<&Value>, key: &str) -> Option<bool> {
+    profile
+        .and_then(|value| value.get(key))
+        .and_then(Value::as_bool)
+        .or_else(|| host::setting_bool(key))
+}
+
+/// Secrets must be declared in plugin.toml, so a profile can only name one of
+/// the four fixed slots. Anything else falls back to the original key.
+fn secret_slot(profile: Option<&Value>) -> String {
+    const SLOTS: [&str; 4] = ["api-key", "api-key-2", "api-key-3", "api-key-4"];
+    let candidate = profile_text(profile, "secretSlot").unwrap_or_default();
+    let candidate = candidate.trim();
+    if SLOTS.contains(&candidate) {
+        candidate.to_owned()
+    } else {
+        "api-key".to_owned()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
+    /// The active model profile, or the single LLM settings when none is
+    /// selected: every request reads only these resolved values.
     pub provider: Provider,
     pub protocol: Protocol,
     pub base_url: String,
@@ -208,50 +310,78 @@ pub struct Config {
     pub temperature: f64,
     pub send_temperature: bool,
     pub max_tokens: u32,
+    /// Which declared plugin secret the request carries.
+    pub secret_slot: String,
     pub language: MessageLanguage,
     pub max_diff_chars: usize,
-    pub commit_types: Vec<String>,
+    pub commit_types: Vec<CommitType>,
+    /// The selected prompt profile's text, or the single extra system prompt.
     pub extra_prompt: String,
+    /// The selected output template; `None` is the built-in Default.
+    pub template: Option<String>,
 }
 
 impl Config {
     pub fn load() -> Self {
-        let protocol_setting = host::setting_string("protocol");
-        let protocol = Protocol::parse(protocol_setting.as_deref()).unwrap_or_else(|| {
-            let provider = Provider::parse(host::setting_string("provider").as_deref());
-            provider.default_protocol()
-        });
-        let provider = Provider::parse(host::setting_string("provider").as_deref());
+        let model = selected("modelProfiles", "activeModel");
+        let provider = Provider::parse(profile_text(model.as_ref(), "provider").as_deref());
+        let protocol = Protocol::parse(profile_text(model.as_ref(), "protocol").as_deref())
+            .unwrap_or_else(|| provider.default_protocol());
 
-        let commit_types = commit_types();
+        let prompt = selected("promptProfiles", "defaultPrompt");
+        let extra_prompt = match prompt.as_ref() {
+            Some(profile) => profile
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_owned(),
+            // No profile selected: the 0.6.x single extra prompt still works.
+            None => host::setting_string("extraPrompt")
+                .unwrap_or_default()
+                .trim()
+                .to_owned(),
+        };
+        // 'Default' is the built-in template. A table row with that name must
+        // not shadow it, which is how the built-in stays protected.
+        let default_template = host::setting_string("defaultTemplate").unwrap_or_default();
+        let template = if default_template.trim() == "Default" {
+            None
+        } else {
+            selected("templates", "defaultTemplate").and_then(|profile| {
+                profile
+                    .get("template")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+        };
 
         Self {
             provider,
             protocol,
-            base_url: host::setting_string("baseUrl")
+            base_url: profile_text(model.as_ref(), "baseUrl")
                 .unwrap_or_default()
                 .trim()
                 .to_owned(),
-            model: host::setting_string("model")
+            model: profile_text(model.as_ref(), "model")
                 .unwrap_or_default()
                 .trim()
                 .to_owned(),
-            temperature: host::setting_number("temperature")
+            temperature: profile_number(model.as_ref(), "temperature")
                 .unwrap_or(0.5)
                 .clamp(0.0, 2.0),
-            send_temperature: host::setting_bool("sendTemperature").unwrap_or(true),
-            max_tokens: host::setting_number("maxTokens")
+            send_temperature: profile_bool(model.as_ref(), "sendTemperature").unwrap_or(true),
+            max_tokens: profile_number(model.as_ref(), "maxTokens")
                 .unwrap_or(64_000.0)
                 .clamp(256.0, 128_000.0) as u32,
+            secret_slot: secret_slot(model.as_ref()),
             language: MessageLanguage::parse(host::setting_string("language").as_deref()),
             max_diff_chars: host::setting_number("maxDiffChars")
                 .unwrap_or(12_000.0)
                 .clamp(2_000.0, 200_000.0) as usize,
-            commit_types,
-            extra_prompt: host::setting_string("extraPrompt")
-                .unwrap_or_default()
-                .trim()
-                .to_owned(),
+            commit_types: commit_types(),
+            extra_prompt,
+            template,
         }
     }
 
@@ -290,6 +420,10 @@ mod tests {
             "room for a reasoning model, within what Anthropic accepts"
         );
         assert_eq!(config.commit_types.len(), 11);
+        assert_eq!(config.commit_types[0].title, "feat");
+        assert_eq!(config.commit_types[0].description, "A new feature");
+        assert_eq!(config.secret_slot, "api-key");
+        assert_eq!(config.template, None);
     }
 
     #[test]
@@ -311,7 +445,14 @@ mod tests {
             !config.send_temperature,
             "the model can omit temperature up front"
         );
-        assert_eq!(config.commit_types, vec!["feat", "fix"]);
+        assert_eq!(
+            config
+                .commit_types
+                .iter()
+                .map(|item| item.title.as_str())
+                .collect::<Vec<_>>(),
+            vec!["feat", "fix"]
+        );
     }
 
     #[test]
@@ -325,7 +466,87 @@ mod tests {
         let host = MockHost::install();
         host.set_setting("commitTypes", r#"["feat","docs","ci"]"#);
         let config = Config::load();
-        assert_eq!(config.commit_types, vec!["feat", "docs", "ci"]);
+        assert_eq!(
+            config
+                .commit_types
+                .iter()
+                .map(|item| item.title.as_str())
+                .collect::<Vec<_>>(),
+            vec!["feat", "docs", "ci"]
+        );
+    }
+
+    #[test]
+    fn reads_commit_type_descriptions_from_the_table() {
+        let host = MockHost::install();
+        host.set_setting(
+            "commitTypes",
+            r#"[{"title":"security","description":"Security hardening"}]"#,
+        );
+        assert_eq!(
+            Config::load().commit_types,
+            vec![CommitType {
+                title: "security".into(),
+                description: "Security hardening".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn the_active_model_profile_overrides_the_single_settings() {
+        let host = MockHost::install();
+        host.set_setting(
+            "modelProfiles",
+            r#"[{"name":"Work","provider":"Custom","protocol":"openai-responses","baseUrl":"https://llm.example.com/v1","model":"work-model","temperature":0.1,"sendTemperature":false,"maxTokens":2048,"secretSlot":"api-key-3"}]"#,
+        );
+        host.set_setting("activeModel", "\"Work\"");
+        let config = Config::load();
+        assert_eq!(config.protocol, Protocol::OpenAiResponses);
+        assert_eq!(config.effective_base_url(), "https://llm.example.com/v1");
+        assert_eq!(config.effective_model(), "work-model");
+        assert_eq!(config.max_tokens, 2048);
+        assert_eq!(config.temperature, 0.1);
+        assert!(!config.send_temperature);
+        assert_eq!(config.secret_slot, "api-key-3");
+    }
+
+    #[test]
+    fn an_unknown_key_slot_cannot_leave_the_declared_set() {
+        let host = MockHost::install();
+        host.set_setting(
+            "modelProfiles",
+            r#"[{"name":"Work","provider":"Custom","secretSlot":"{{secret:anything}}"}]"#,
+        );
+        host.set_setting("activeModel", "\"Work\"");
+        assert_eq!(Config::load().secret_slot, "api-key");
+    }
+
+    #[test]
+    fn a_selected_prompt_profile_replaces_the_single_extra_prompt() {
+        let host = MockHost::install();
+        host.set_setting("extraPrompt", "\"old single prompt\"");
+        host.set_setting(
+            "promptProfiles",
+            r#"[{"name":"Team","text":"Team writing preferences"}]"#,
+        );
+        host.set_setting("defaultPrompt", "\"Team\"");
+        assert_eq!(Config::load().extra_prompt, "Team writing preferences");
+
+        host.set_setting("defaultPrompt", "\"Missing\"");
+        assert_eq!(Config::load().extra_prompt, "old single prompt");
+    }
+
+    #[test]
+    fn a_selected_template_is_used_but_default_stays_built_in() {
+        let host = MockHost::install();
+        host.set_setting(
+            "templates",
+            r#"[{"name":"Team","template":"{{subject}}"},{"name":"Default","template":"HACKED"}]"#,
+        );
+        host.set_setting("defaultTemplate", "\"Team\"");
+        assert_eq!(Config::load().template.as_deref(), Some("{{subject}}"));
+        host.set_setting("defaultTemplate", "\"Default\"");
+        assert_eq!(Config::load().template, None);
     }
 
     #[test]

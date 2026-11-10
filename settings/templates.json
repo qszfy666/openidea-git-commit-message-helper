@@ -1,0 +1,31 @@
+{
+  "properties": {
+    "templates": {
+      "type": "array",
+      "title": "Commit templates",
+      "description": "Named output templates. The built-in 'Default' is always available and cannot be replaced; give your templates other names. Variables: {{type}}, {{scope}}, {{subject}}, {{body}}, {{changes}}, {{closes}}, {{skipCi}}, and {{header}} (type(scope): subject). A conditional section {{#body}}...{{/body}} is emitted only when that field is non-empty; any of the variables above can name a section, and a section can contain variables. Plain text outside variables is kept verbatim, so a footer is just a last line. Nested sections, loops and expressions are not supported; an invalid template falls back to Default and the notification says why.",
+      "group": "Templates",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "title": "Name", "default": "" },
+          "template": {
+            "type": "string",
+            "title": "Template",
+            "multiline": true,
+            "description": "Example: {{header}}{{#body}}\n\n{{body}}{{/body}}",
+            "default": ""
+          }
+        }
+      },
+      "default": []
+    },
+    "defaultTemplate": {
+      "type": "string",
+      "title": "Default template",
+      "description": "Name of the template used to render the message. Blank or 'Default' uses the built-in Conventional Commits template. This Project value overrides the Global one; leave it blank in a project to inherit the global choice.",
+      "group": "Templates",
+      "default": ""
+    }
+  }
+}

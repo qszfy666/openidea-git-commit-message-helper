@@ -37,27 +37,36 @@ enum Action {
 struct Generated {
     message: String,
     diagnostics: llm::Diagnostics,
+    /// Why the built-in Default had to be used instead of a named template.
+    template_error: Option<String>,
 }
 
 impl Generated {
     /// The balloon: the message, then what the request carried.
     fn notification(&self, strings: &ui::Strings) -> String {
-        format!(
+        let mut body = format!(
             "{}\n\n{}\n\n{}",
             strings.generated,
             ui::clip(&self.message, 800),
             self.diagnostics.summary()
-        )
+        );
+        if let Some(error) = &self.template_error {
+            body.push_str(&format!("\n\n{} {error}", strings.template_fallback));
+        }
+        body
     }
 }
 
 impl CommitMessageHelper {
     fn generate(&mut self, ctx: &Invocation, action: Action) -> Result<Generated, Error> {
         let strings = ui::strings(UiLanguage::load());
-        if !host::secret_is_set("api-key") {
-            return Err(Error::Failed(strings.not_configured.to_owned()));
-        }
         let config = Config::load();
+        if !host::secret_is_set(&config.secret_slot) {
+            return Err(Error::Failed(format!(
+                "{} {}: {}",
+                strings.not_configured, strings.key_slot, config.secret_slot
+            )));
+        }
         let task = host::begin_task(TITLE, true);
         task.report(0, None, Some(strings.collecting));
 
@@ -88,11 +97,26 @@ impl CommitMessageHelper {
                 return Err(Error::Cancelled);
             }
 
-            let fields = prompt::parse_response(&answer.text, &config.commit_types)
+            let allowed_types: Vec<String> = config
+                .commit_types
+                .iter()
+                .map(|item| item.title.clone())
+                .collect();
+            let fields = prompt::parse_response(&answer.text, &allowed_types)
                 .ok_or_else(|| Error::Failed(strings.bad_response.to_owned()))?;
+            let template = config
+                .template
+                .as_deref()
+                .unwrap_or(prompt::DEFAULT_TEMPLATE);
+            let (message, template_error) = match prompt::render_template(&fields, template) {
+                Ok(message) => (message, None),
+                // A broken template must not lose the generated message.
+                Err(error) => (prompt::render(&fields), Some(error)),
+            };
             Ok(Generated {
-                message: prompt::render(&fields),
+                message,
                 diagnostics: answer.diagnostics,
+                template_error,
             })
         })();
         let generated = match generated {
@@ -961,5 +985,280 @@ mod tests {
 
         let result = CommitMessageHelper.run_command("test", &host.invocation(), None);
         assert!(result.is_err(), "a non-JSON answer is not a passing test");
+    }
+
+    /// A model profile owns the endpoint, model, sampling, token limit and key
+    /// slot; the single LLM settings above it are only the fallback.
+    #[test]
+    fn the_active_model_profile_drives_the_request() {
+        let host = MockHost::install().with_capabilities(&[
+            "vcs.read",
+            "vcs.write",
+            "secrets",
+            "net:api.deepseek.com",
+            "net:llm.example.com",
+        ]);
+        host.set_secret("api-key", "the-default-key");
+        host.set_secret("api-key-2", "the-second-key");
+        host.set_setting(
+            "modelProfiles",
+            r#"[{"name":"Work","provider":"Custom","protocol":"openai-chat","baseUrl":"https://llm.example.com/v1","model":"work-model","temperature":0.1,"sendTemperature":true,"maxTokens":2048,"secretSlot":"api-key-2"}]"#,
+        );
+        host.set_setting("activeModel", "\"Work\"");
+        host.set_commit_draft(Some(draft_with_message("")));
+        host.on_fetch(|request| {
+            assert_eq!(
+                request.url,
+                "https://llm.example.com/v1/chat/completions",
+                "the profile's base URL and protocol are used"
+            );
+            let body: serde_json::Value =
+                serde_json::from_slice(request.body.as_deref().unwrap()).unwrap();
+            assert_eq!(body["model"], "work-model");
+            assert_eq!(body["max_tokens"], 2048, "the profile's own token limit");
+            assert_eq!(body["temperature"], 0.1);
+            // The mock host fills the secret placeholder on the way out, as
+            // the IDE does: this is slot 2's key, not the default slot's.
+            assert!(
+                request.headers.iter().any(|(name, value)| {
+                    name == "Authorization" && value == "Bearer the-second-key"
+                }),
+                "the profile's own key slot is used: {:?}",
+                request.headers
+            );
+            Ok(HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: br#"{"choices":[{"message":{"content":"{\"type\":\"fix\",\"subject\":\"fix crash\"}"}}]}"#.to_vec(),
+            })
+        });
+
+        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(host.requests().len(), 1, "one request to the profile");
+        assert_eq!(host.commit_draft().unwrap().message, "fix: fix crash");
+    }
+
+    #[test]
+    fn a_profile_needs_only_its_own_key_slot() {
+        let host = MockHost::install().with_capabilities(&[
+            "vcs.read",
+            "vcs.write",
+            "secrets",
+            "net:api.deepseek.com",
+            "net:llm.example.com",
+        ]);
+        // Deliberately no `api-key`: the active profile uses slot 2.
+        host.set_secret("api-key-2", "the-second-key");
+        host.set_setting(
+            "modelProfiles",
+            r#"[{"name":"Work","provider":"Custom","protocol":"openai-chat","baseUrl":"https://llm.example.com/v1","model":"work-model","temperature":0.5,"sendTemperature":true,"maxTokens":2048,"secretSlot":"api-key-2"}]"#,
+        );
+        host.set_setting("activeModel", "\"Work\"");
+        host.set_commit_draft(Some(draft_with_message("")));
+        host.on_fetch(|_| {
+            Ok(HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: br#"{"choices":[{"message":{"content":"{\"type\":\"fix\",\"subject\":\"fix crash\"}"}}]}"#.to_vec(),
+            })
+        });
+
+        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(host.requests().len(), 1, "the profile's key is enough");
+        assert_eq!(host.commit_draft().unwrap().message, "fix: fix crash");
+    }
+
+    #[test]
+    fn a_named_prompt_profile_reaches_the_system_prompt() {
+        let host = MockHost::install().with_capabilities(&[
+            "vcs.read",
+            "vcs.write",
+            "secrets",
+            "net:api.deepseek.com",
+        ]);
+        host.set_secret("api-key", "test-key");
+        host.set_setting(
+            "promptProfiles",
+            r#"[{"name":"Team","text":"Always mention the ticket id in the body."}]"#,
+        );
+        host.set_setting("defaultPrompt", "\"Team\"");
+        host.set_commit_draft(Some(draft_with_message("")));
+        host.on_fetch(|request| {
+            let body: serde_json::Value =
+                serde_json::from_slice(request.body.as_deref().unwrap()).unwrap();
+            assert!(
+                body["messages"][0]["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Always mention the ticket id in the body."),
+                "the selected profile replaces the single extra prompt: {body}"
+            );
+            Ok(HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: br#"{"choices":[{"message":{"content":"{\"type\":\"fix\",\"subject\":\"fix crash\"}"}}]}"#.to_vec(),
+            })
+        });
+
+        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(host.commit_draft().unwrap().message, "fix: fix crash");
+    }
+
+    #[test]
+    fn a_named_template_renders_the_message() {
+        let host = MockHost::install().with_capabilities(&[
+            "vcs.read",
+            "vcs.write",
+            "secrets",
+            "net:api.deepseek.com",
+        ]);
+        host.set_secret("api-key", "test-key");
+        host.set_setting(
+            "templates",
+            r#"[{"name":"Team","template":"{{header}}{{#body}}\n\n{{body}}{{/body}}{{#closes}}\n\nCloses {{closes}}{{/closes}}\n\nSigned-off-by: Team"}]"#,
+        );
+        host.set_setting("defaultTemplate", "\"Team\"");
+        host.set_commit_draft(Some(draft_with_message("")));
+        host.on_fetch(|_| {
+            Ok(HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: serde_json::to_vec(&serde_json::json!({
+                    "choices": [{"message": {"content": "{\"type\":\"fix\",\"subject\":\"fix crash\",\"body\":\"one\\ntwo\",\"closes\":\"#7\"}"}}]
+                }))
+                .unwrap(),
+            })
+        });
+
+        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(
+            host.commit_draft().unwrap().message,
+            "fix: fix crash\n\n- one\n- two\n\nCloses #7\n\nSigned-off-by: Team"
+        );
+    }
+
+    #[test]
+    fn an_invalid_template_falls_back_and_says_why() {
+        let host = MockHost::install().with_capabilities(&[
+            "vcs.read",
+            "vcs.write",
+            "secrets",
+            "net:api.deepseek.com",
+        ]);
+        host.set_secret("api-key", "test-key");
+        host.set_setting("templates", r#"[{"name":"Team","template":"{{unknown}}"}]"#);
+        host.set_setting("defaultTemplate", "\"Team\"");
+        host.set_commit_draft(Some(draft_with_message("")));
+        host.on_fetch(|_| {
+            Ok(HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: br#"{"choices":[{"message":{"content":"{\"type\":\"fix\",\"subject\":\"fix crash\"}"}}]}"#.to_vec(),
+            })
+        });
+
+        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(host.commit_draft().unwrap().message, "fix: fix crash");
+        let shown = host.notifications();
+        let body = &shown.last().unwrap().body;
+        assert!(body.contains("unknown template variable"), "{body}");
+    }
+
+    #[test]
+    fn the_built_in_default_template_cannot_be_replaced() {
+        let host = MockHost::install().with_capabilities(&[
+            "vcs.read",
+            "vcs.write",
+            "secrets",
+            "net:api.deepseek.com",
+        ]);
+        host.set_secret("api-key", "test-key");
+        host.set_setting(
+            "templates",
+            r#"[{"name":"Default","template":"HACKED {{subject}}"}]"#,
+        );
+        host.set_setting("defaultTemplate", "\"Default\"");
+        host.set_commit_draft(Some(draft_with_message("")));
+        host.on_fetch(|_| {
+            Ok(HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: br#"{"choices":[{"message":{"content":"{\"type\":\"fix\",\"subject\":\"fix crash\"}"}}]}"#.to_vec(),
+            })
+        });
+
+        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+        assert!(result.is_ok(), "{result:?}");
+        let message = host.commit_draft().unwrap().message;
+        assert_eq!(message, "fix: fix crash");
+        assert!(!message.contains("HACKED"));
+    }
+
+    #[test]
+    fn commit_type_descriptions_reach_the_prompt_and_validate() {
+        let host = MockHost::install().with_capabilities(&[
+            "vcs.read",
+            "vcs.write",
+            "secrets",
+            "net:api.deepseek.com",
+        ]);
+        host.set_secret("api-key", "test-key");
+        host.set_setting(
+            "commitTypes",
+            r#"[{"title":"security","description":"Security hardening"}]"#,
+        );
+        host.set_commit_draft(Some(draft_with_message("")));
+        host.on_fetch(|request| {
+            let body = request_body(request);
+            assert!(
+                body.contains("Security hardening"),
+                "the description helps the model choose: {body}"
+            );
+            Ok(HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: br#"{"choices":[{"message":{"content":"{\"type\":\"security\",\"subject\":\"restrict access\"}"}}]}"#.to_vec(),
+            })
+        });
+
+        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(
+            host.commit_draft().unwrap().message,
+            "security: restrict access",
+            "only the title is a valid type"
+        );
+    }
+
+    #[test]
+    fn an_unknown_profile_name_falls_back_to_the_single_settings() {
+        let host = MockHost::install().with_capabilities(&[
+            "vcs.read",
+            "vcs.write",
+            "secrets",
+            "net:api.deepseek.com",
+        ]);
+        host.set_secret("api-key", "test-key");
+        host.set_setting("activeModel", "\"Does not exist\"");
+        host.set_setting("defaultPrompt", "\"Does not exist\"");
+        host.set_setting("defaultTemplate", "\"Does not exist\"");
+        host.set_commit_draft(Some(draft_with_message("")));
+        host.on_fetch(|request| {
+            assert!(request.url.ends_with("/chat/completions"), "{}", request.url);
+            Ok(HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: br#"{"choices":[{"message":{"content":"{\"type\":\"fix\",\"subject\":\"fix crash\"}"}}]}"#.to_vec(),
+            })
+        });
+
+        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(host.commit_draft().unwrap().message, "fix: fix crash");
     }
 }

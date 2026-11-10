@@ -11,6 +11,7 @@ This is an OpenIDEA WebAssembly plugin (Rust SDK, plugin API 1.4). It is inspire
 - Reads exactly the files and changed blocks included in the commit through `host::pending_commit()` — including partial hunk selections. Unsaved editors of those files are saved first, as Commit does.
 - Sends their status and included diffs (trimmed per hunk and by a character budget) to your LLM, plus the last five commit subjects from `Project::vcs_log()` as a style reference. History is only a style hint: the working-tree `vcs_diff()` is never used, and the generated content stays grounded in the selected changes.
 - The model returns structured fields (`type`, `scope`, `subject`, `body`, `changes`, `closes`, `skipCi`); the plugin renders the final Conventional Commit locally, so formatting stays consistent.
+- Reusable named profiles: keep several model configurations (each with its own token limit and API key slot), writing preferences and output templates, and switch between them. A project can pick its own defaults and inherit the global ones.
 - Shows that it is running: an empty message field holds `Generating commit message…` until the result replaces it (a field you already typed in stays untouched), with the progress task in the status bar either way.
 - Writes the generated message into the native commit message field with `host::set_commit_message()`. If you type or change the included changes while the model is answering, the revision check rejects the write and your current text is preserved.
 - Retries a request a model refuses because of `max_tokens` (switching to `max_completion_tokens`) or `temperature` (dropping it). All attempts share one 50 s budget inside the host's 60 s task window; a **Send temperature** setting can also omit the parameter up front.
@@ -20,7 +21,7 @@ This is an OpenIDEA WebAssembly plugin (Rust SDK, plugin API 1.4). It is inspire
 ## Requirements
 
 - OpenIDEA 0.1.40 or newer (plugin API 1.4).
-- An OpenAI-compatible, OpenAI Responses, or Anthropic Messages endpoint. The API key is stored in the system keychain (plugin secret `api-key`), never in settings or storage.
+- An OpenAI-compatible, OpenAI Responses, or Anthropic Messages endpoint. API keys are stored in the system keychain as four declared plugin secrets (`api-key`, `api-key-2`, `api-key-3`, `api-key-4`), never in settings or storage.
 
 No `git` binary is needed: the IDE supplies the pending commit and its diffs.
 
@@ -38,7 +39,7 @@ cargo test
 cargo build --release --target wasm32-wasip2
 mkdir -p dist
 cp target/wasm32-wasip2/release/openidea_plugin_commit_message_helper.wasm dist/plugin.wasm
-openidea-plugin pack . --out dist/qszfy666.commit-message-helper-0.6.0.oiplugin   # unsigned, for local install
+openidea-plugin pack . --out dist/qszfy666.commit-message-helper-0.7.0.oiplugin   # unsigned, for local install
 ```
 
 Then either:
@@ -54,17 +55,44 @@ Open **Settings › Plugins** to load the change. The plugin appears as **Git Co
 
 ## Configure
 
-**Settings › Plugins › Git Commit Message Helper** has three pages:
+**Settings › Plugins › Git Commit Message Helper** has four pages:
 
 | Page | Settings |
 | --- | --- |
-| Commit | Commit message language (`auto` follows the IDE interface language, or Chinese/English), maximum diff characters, allowed commit types (an editable list). |
-| Prompts | Extra system prompt for persistent preferences. |
-| LLM Settings | Provider preset, API protocol, Base URL, Model, Temperature, **Send temperature**, Max response tokens; and three page actions: **Test** (a minimal request, with request diagnostics), **Models** (lists the endpoint's model ids), **Request URL** (shows the exact URL a generation posts to). Every action applies pending settings first. |
+| Commit | Commit message language (`auto` follows the IDE interface language, or Chinese/English), maximum diff characters, allowed commit types (a title + description table; the description is included in the prompt). |
+| Prompts | Extra system prompt for persistent preferences, prompt profile table and **Default prompt profile**. |
+| Commit Templates | Output template table and **Default template**. |
+| LLM Settings | Provider preset, API protocol, Base URL, Model, Temperature, **Send temperature**, Max response tokens, model profile table and **Active model profile**; and three page actions: **Test** (a minimal request, with request diagnostics), **Models** (lists the endpoint's model ids), **Request URL** (shows the exact URL a generation posts to). Every action applies pending settings first. |
 
-The API key is a plugin secret, and it is not on any of those pages: **Settings › Plugins › Installed › select Git Commit Message Helper › Secrets › LLM API key › Save**. It is kept in the system keychain, never in the settings files.
+API keys are plugin secrets, not fields on those pages: **Settings › Plugins › Installed › select Git Commit Message Helper › Secrets › LLM API key › Save**. Four slots are declared (`api-key`, `api-key-2`, `api-key-3`, `api-key-4`); a model profile chooses one in its **Key slot** column. They are kept in the system keychain, never in the settings files.
 
 **Models** calls `GET {base}/models`, lets you pick an id and copies it to the clipboard. The host's declarative settings are read-only to plugins, so paste it into **Model**; the field is always editable by hand. **Request URL** uses the same Base URL/protocol rules as generation, so it shows what the next request will actually hit.
+
+### Named profiles, templates and project defaults
+
+Three declarative tables let you keep several configurations. Plugin settings are read-only to plugins, so add, rename, edit, copy and remove rows directly in the IDE settings page.
+
+| Table | Page | Selector | Nothing selected |
+| --- | --- | --- | --- |
+| **Model profiles** | LLM Settings | **Active model profile** | The single LLM settings above the table |
+| **Prompt profiles** | Prompts | **Default prompt profile** | The single **Extra system prompt** |
+| **Commit templates** | Commit Templates | **Default template** | The built-in **Default** template |
+
+A model profile carries its own provider, protocol, Base URL, model, temperature, **Max response tokens** and key slot. The three page actions (Test / Models / Request URL) use the active profile too; leaving the selector blank keeps the 0.6.x single settings in charge, so existing configurations need no migration.
+
+An output template controls the final text with variables `{{type}}`, `{{scope}}`, `{{subject}}`, `{{body}}`, `{{changes}}`, `{{closes}}`, `{{skipCi}}` and `{{header}}` (`type(scope): subject`). A conditional section `{{#body}}…{{/body}}` is emitted only when that field is non-empty, which lets you choose field order, separators and optional paragraphs; text outside variables is kept verbatim, so a footer is just a last line. For example, this template keeps the header, emits the body section only when there is one, and always adds a footer (the blank lines are real newlines in the text area):
+
+```text
+{{header}}{{#body}}
+
+{{body}}{{/body}}
+
+Signed-off-by: Team
+```
+
+The built-in **Default** always exists and cannot be shadowed by a row named `Default`. Nested sections, loops and expressions are rejected; an invalid template falls back to Default and the notification explains why. Full Velocity compatibility is a separate evaluation.
+
+Each selector is an ordinary setting key. The IDE resolves settings as project over global: a value set for this project wins, leaving it blank in a project inherits the global choice. The profile tables themselves follow the same rule; the two layers are not merged.
 
 The plugin declares these optional network capabilities; grant the ones you use:
 
@@ -111,10 +139,10 @@ cargo build --release --target wasm32-wasip2
 
 Layout:
 
-- `src/config.rs` — settings and provider presets.
+- `src/config.rs` — settings, provider presets, named-profile resolution and project defaults.
 - `src/git.rs` — pending-commit context and diff trimming.
-- `src/prompt.rs` — prompt construction, JSON parsing, Conventional Commit rendering.
-- `src/llm.rs` — the three protocol clients over `host::fetch`, the model list, compatibility retries, request diagnostics and the connection test.
+- `src/prompt.rs` — prompt construction, JSON parsing, template rendering (built-in Default and named templates).
+- `src/llm.rs` — the three protocol clients over `host::fetch`, key slots, the model list, compatibility retries, request diagnostics and the connection test.
 - `src/lib.rs` — plugin commands; `plugin.toml` — manifest, capabilities, contributions.
 
 ## License

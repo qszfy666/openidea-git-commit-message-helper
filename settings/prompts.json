@@ -4,8 +4,34 @@
       "type": "string",
       "multiline": true,
       "title": "Extra system prompt",
-      "description": "Optional persistent preferences added to the system prompt.",
+      "description": "Persistent preferences used when no prompt profile is selected below. Kept for settings saved by earlier versions.",
       "group": "Prompt",
+      "default": ""
+    },
+    "promptProfiles": {
+      "type": "array",
+      "title": "Prompt profiles",
+      "description": "Named writing preferences. Add, rename, edit, reorder and remove rows here; the selected profile replaces the Extra system prompt above. Output constraints still apply.",
+      "group": "Profiles",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "title": "Name", "default": "" },
+          "text": {
+            "type": "string",
+            "title": "Prompt",
+            "multiline": true,
+            "default": ""
+          }
+        }
+      },
+      "default": []
+    },
+    "defaultPrompt": {
+      "type": "string",
+      "title": "Default prompt profile",
+      "description": "Name of the prompt profile to use. Blank uses Extra system prompt. This Project value overrides the Global one; leave it blank in a project to inherit the global choice.",
+      "group": "Profiles",
       "default": ""
     }
   }

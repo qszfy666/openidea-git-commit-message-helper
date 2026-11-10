@@ -65,8 +65,25 @@ fn output_contract(config: &Config, language: &str) -> String {
 10. `closes` contains only issue references without the \"Closes\" prefix.\n\
 11. `skipCi` is empty unless the selected changes clearly require a skip-ci marker.\n\
 12. Allowed types: {}.",
-        config.commit_types.join(", ")
+        allowed_types(config)
     )
+}
+
+/// Allowed types with their descriptions, so the model can pick the right one
+/// instead of guessing from a bare title.
+fn allowed_types(config: &Config) -> String {
+    config
+        .commit_types
+        .iter()
+        .map(|item| {
+            if item.description.is_empty() {
+                item.title.clone()
+            } else {
+                format!("{} ({})", item.title, item.description)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 pub fn build_prompts(config: &Config, context: &GitContext, task: Task<'_>) -> (String, String) {
@@ -333,8 +350,16 @@ fn normalize_body(body: &str) -> String {
         .join("\n")
 }
 
-/// Renders the fields as the final Conventional Commit message.
-pub fn render(fields: &CommitFields) -> String {
+/// The built-in Default template. Named templates in the settings table use
+/// the same variables and conditional sections; full Velocity compatibility
+/// (checklist item 46) is a separate evaluation.
+pub const DEFAULT_TEMPLATE: &str = "{{header}}{{#body}}\n\n{{body}}{{/body}}{{#changes}}\n\nBREAKING CHANGE: {{changes}}{{/changes}}{{#closes}}\n\nCloses {{closes}}{{/closes}}{{#skipCi}}\n\n{{skipCi}}{{/skipCi}}";
+
+const TEMPLATE_FIELDS: [&str; 8] = [
+    "type", "scope", "subject", "body", "changes", "closes", "skipCi", "header",
+];
+
+fn template_header(fields: &CommitFields) -> String {
     let mut out = String::new();
     if !fields.commit_type.is_empty() || !fields.scope.is_empty() {
         out.push_str(fields.commit_type.trim());
@@ -346,25 +371,86 @@ pub fn render(fields: &CommitFields) -> String {
         out.push_str(": ");
     }
     out.push_str(fields.subject.trim());
+    out
+}
 
-    let body = normalize_body(&fields.body);
-    if !body.is_empty() {
-        out.push_str("\n\n");
-        out.push_str(&body);
+fn template_value(fields: &CommitFields, name: &str) -> String {
+    match name {
+        "type" => fields.commit_type.trim().to_owned(),
+        "scope" => fields.scope.trim().to_owned(),
+        "subject" => fields.subject.trim().to_owned(),
+        "body" => normalize_body(&fields.body),
+        "changes" => fields.changes.trim().to_owned(),
+        "closes" => fields.closes.trim().to_owned(),
+        "skipCi" => fields.skip_ci.trim().to_owned(),
+        "header" => template_header(fields),
+        _ => String::new(),
     }
-    if !fields.changes.trim().is_empty() {
-        out.push_str("\n\nBREAKING CHANGE: ");
-        out.push_str(fields.changes.trim());
+}
+
+fn push_template_text(out: &mut String, block: &mut Option<(&str, String)>, text: &str) {
+    if let Some((_, content)) = block {
+        content.push_str(text);
+    } else {
+        out.push_str(text);
     }
-    if !fields.closes.trim().is_empty() {
-        out.push_str("\n\nCloses ");
-        out.push_str(fields.closes.trim());
+}
+
+/// Renders fields with a named template. `{{field}}` inserts a value;
+/// `{{#field}}...{{/field}}` emits its contents only when that field is
+/// non-empty. Plain text (including a footer) is kept as written. Nesting,
+/// loops and expressions are rejected rather than silently mis-rendered.
+pub fn render_template(fields: &CommitFields, template: &str) -> Result<String, String> {
+    let mut out = String::new();
+    let mut block: Option<(&str, String)> = None;
+    let mut rest = template;
+    while let Some(start) = rest.find("{{") {
+        let (text, tail) = rest.split_at(start);
+        push_template_text(&mut out, &mut block, text);
+        let after = &tail[2..];
+        let Some(end) = after.find("}}") else {
+            return Err("unclosed '{{' in the template".to_owned());
+        };
+        let tag = after[..end].trim();
+        rest = &after[end + 2..];
+        if let Some(name) = tag.strip_prefix('#') {
+            if block.is_some() {
+                return Err("nested conditional sections are not supported".to_owned());
+            }
+            if !TEMPLATE_FIELDS.contains(&name) {
+                return Err(format!("unknown template variable '{name}'"));
+            }
+            block = Some((name, String::new()));
+        } else if let Some(name) = tag.strip_prefix('/') {
+            match block.take() {
+                Some((open, content)) if open == name => {
+                    if !template_value(fields, open).is_empty() {
+                        out.push_str(&content);
+                    }
+                }
+                Some((open, _)) => {
+                    return Err(format!("section '{open}' is closed by '{name}'"));
+                }
+                None => return Err(format!("unexpected section end '{name}'")),
+            }
+        } else {
+            if !TEMPLATE_FIELDS.contains(&tag) {
+                return Err(format!("unknown template variable '{tag}'"));
+            }
+            let value = template_value(fields, tag);
+            push_template_text(&mut out, &mut block, &value);
+        }
     }
-    if !fields.skip_ci.trim().is_empty() {
-        out.push_str("\n\n");
-        out.push_str(fields.skip_ci.trim());
+    push_template_text(&mut out, &mut block, rest);
+    if let Some((open, _)) = block {
+        return Err(format!("section '{open}' is never closed"));
     }
-    out.trim_end().to_owned()
+    Ok(out.trim_end().to_owned())
+}
+
+/// Renders with the built-in Default template.
+pub fn render(fields: &CommitFields) -> String {
+    render_template(fields, DEFAULT_TEMPLATE).expect("the built-in template is valid")
 }
 
 #[cfg(test)]
@@ -485,5 +571,93 @@ mod tests {
         assert_eq!(config.language.prompt_language(), "Simplified Chinese");
         host.set_locale("en");
         assert_eq!(config.language.prompt_language(), "English");
+    }
+
+    fn full_fields() -> CommitFields {
+        CommitFields {
+            commit_type: "feat".into(),
+            scope: "parser".into(),
+            subject: "支持新的语法".into(),
+            body: "第一行\n第二行".into(),
+            changes: "旧接口被移除".into(),
+            closes: "#12".into(),
+            skip_ci: "[skip ci]".into(),
+        }
+    }
+
+    #[test]
+    fn the_built_in_template_matches_the_default_render() {
+        assert_eq!(
+            render(&full_fields()),
+            "feat(parser): 支持新的语法\n\n- 第一行\n- 第二行\n\nBREAKING CHANGE: 旧接口被移除\n\nCloses #12\n\n[skip ci]"
+        );
+    }
+
+    #[test]
+    fn a_custom_template_controls_order_sections_and_footer() {
+        let template =
+            "{{subject}} [{{type}}/{{scope}}]{{#body}}\n\n{{body}}{{/body}}\n\nSigned-off-by: Team";
+        assert_eq!(
+            render_template(&full_fields(), template).unwrap(),
+            "支持新的语法 [feat/parser]\n\n- 第一行\n- 第二行\n\nSigned-off-by: Team"
+        );
+    }
+
+    #[test]
+    fn empty_sections_leave_no_blank_lines() {
+        let fields = CommitFields {
+            commit_type: "fix".into(),
+            subject: "fix crash".into(),
+            ..CommitFields::default()
+        };
+        assert_eq!(
+            render_template(&fields, DEFAULT_TEMPLATE).unwrap(),
+            "fix: fix crash"
+        );
+        assert_eq!(
+            render_template(
+                &fields,
+                "{{header}}{{#changes}}\n\nBREAKING CHANGE: {{changes}}{{/changes}}\n\nfooter"
+            )
+            .unwrap(),
+            "fix: fix crash\n\nfooter"
+        );
+    }
+
+    #[test]
+    fn invalid_templates_are_reported() {
+        let fields = full_fields();
+        assert!(
+            render_template(&fields, "{{nope}}")
+                .unwrap_err()
+                .contains("unknown")
+        );
+        assert!(
+            render_template(&fields, "{{#body}}open")
+                .unwrap_err()
+                .contains("never closed")
+        );
+        assert!(
+            render_template(&fields, "{{#body}}{{#changes}}x{{/changes}}{{/body}}")
+                .unwrap_err()
+                .contains("nested")
+        );
+        assert!(
+            render_template(&fields, "unclosed {{")
+                .unwrap_err()
+                .contains("unclosed")
+        );
+    }
+
+    #[test]
+    fn prompt_lists_type_descriptions() {
+        let host = openidea_plugin::mock::MockHost::install();
+        host.set_setting(
+            "commitTypes",
+            r#"[{"title":"security","description":"Security hardening"}]"#,
+        );
+        let config = Config::load();
+        let (_, user) = build_prompts(&config, &sample_context(), Task::Generate);
+        assert!(user.contains("security (Security hardening)"), "{user}");
     }
 }

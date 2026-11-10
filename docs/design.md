@@ -26,9 +26,9 @@ OpenIDEA Commit 工具窗 / Commit 对话框
         │
         └─ WASM 插件（Rust SDK 1.4）
               ├─ git.rs    从 CommitDraft 构建 prompt 上下文，裁剪 diff，读取历史标题
-              ├─ prompt.rs 三种任务的 prompt + JSON 字段契约 + 本地 Conventional Commit 渲染
-              ├─ llm.rs    host::fetch → 三种协议、模型列表、兼容重试、请求诊断
-              ├─ config.rs 设置与服务商预设
+              ├─ prompt.rs 三种任务的 prompt + JSON 字段契约 + 模板渲染（内置 Default 与命名模板）
+              ├─ llm.rs    host::fetch → 三种协议、模型列表、兼容重试、请求诊断、密钥槽
+              ├─ config.rs 设置、服务商预设、命名档案解析与项目层选择
               ├─ ui.rs     中英文通知与对话框文案
               └─ lib.rs    命令入口：generate / generate-with-context / format / models / endpoint / test
 ```
@@ -57,9 +57,26 @@ Base URL 留空时使用 provider 预设；有路径时直接追加协议后缀�
 
 设置使用插件 API 1.3 的声明式多页设置：
 
-- **Commit**：提交信息语言（`auto` 跟随 IDE 界面语言）、最大 diff 字符数、允许的提交类型（字符串数组）；
-- **Prompts**：额外系统提示词；
-- **LLM Settings**：Provider、协议、Base URL、Model、Temperature、**Send temperature**、Max response tokens；页面的 **Test**、**Models**、**Request URL** 三个动作都会先应用待保存设置。**Test** 发起一次最小请求并给出诊断摘要，**Models** 请求 `GET {base}/models` 后选择并把 id 复制到剪贴板（声明式设置对插件只读，用户自行粘贴到 Model），**Request URL** 显示按 Base URL 和协议拼接出的实际请求地址。
+- **Commit**：提交信息语言（`auto` 跟随 IDE 界面语言）、最大 diff 字符数、允许的提交类型（标题＋描述表格）；
+- **Prompts**：额外系统提示词、提示词档案表格与默认选择；
+- **Commit Templates**：输出模板档案表格与默认选择；
+- **LLM Settings**：Provider、协议、Base URL、Model、Temperature、**Send temperature**、Max response tokens、模型档案表格与活动档案选择；页面的 **Test**、**Models**、**Request URL** 三个动作都会先应用待保存设置。**Test** 发起一次最小请求并给出诊断摘要，**Models** 请求 `GET {base}/models` 后选择并把 id 复制到剪贴板（声明式设置对插件只读，用户自行粘贴到 Model），**Request URL** 显示按 Base URL 和协议拼接出的实际请求地址。
+
+### 4.2 命名档案与项目默认（0.7.0）
+
+三种档案都用声明式表格（`array` of `object`）保存，单元格只支持标量，长文本列声明 `multiline` 后由宿主渲染为多行输入框。插件对设置只读，所以档案的新建、改名、编辑、复制、删除与排序都由 IDE 设置界面完成。
+
+| 档案 | 表格键 | 选择键 | 未选择时的回退 |
+| --- | --- | --- | --- |
+| 模型 | `modelProfiles` | `activeModel` | LLM Settings 原有的单份设置 |
+| 提示词 | `promptProfiles` | `defaultPrompt` | 原有的 `extraPrompt` |
+| 输出模板 | `templates` | `defaultTemplate` | 内置的 **Default** 模板 |
+
+`Config::load()` 把选中档案解析成一组扁平的最终值，之后 `llm.rs`、`prompt.rs` 只读这些值；三个页面动作读取的也是活动模型档案。选择键或名字不匹配时直接回退，0.6.x 的设置不需要迁移。
+
+选择键是普通设置键，宿主按 project over global 解析：项目层有值就用项目值，项目里留空即继承全局选择；表格本身也按同一规则分层，不合并两层档案库（清单第 10、14 项）。
+
+密钥不能写进表格。manifest 静态预声明四个密钥槽（`api-key`、`api-key-2`、`api-key-3`、`api-key-4`），模型档案在 **Key slot** 列用 enum 选一个，请求头写 `{{secret:<slot>}}` 由宿主从钥匙串填充。槽名在进入处校验，非法值回退 `api-key`；只检查活动档案对应的槽是否填写（清单第 20 项）。
 
 网络白名单通过 `plugin.toml` 的 optional `net:` 能力声明；内置 OpenAI、Anthropic、DeepSeek、Qwen、Kimi、GLM、MiniMax、SiliconFlow、Volcengine、Azure OpenAI、OpenRouter、Groq、Mistral、Google Gemini、`127.0.0.1`（Magpie）与 `localhost`（Ollama）。`clipboard` 也是可选能力，只用于复制选中的模型 id。Magpie 示例：`provider = Magpie`、`baseUrl = http://127.0.0.1:3425`、`model = <Magpie 模型 id>`。
 
@@ -98,6 +115,8 @@ Closes #123
 
 最终格式由插件控制，而不是让模型自由发挥；便于保证团队一致性。解析支持 `<think>` 包裹、Markdown 代码围栏、body 数组、字段逐个提取，最后回退到普通 Conventional Commit 行。
 
+0.7.0 起最终格式可由命名模板覆盖。变量为 `{{type}}`、`{{scope}}`、`{{subject}}`、`{{body}}`、`{{changes}}`、`{{closes}}`、`{{skipCi}}` 与 `{{header}}`（即 `type(scope): subject`）；条件段 `{{#field}}…{{/field}}` 只在该字段非空时输出，因此字段顺序、分隔符、可选段落和 footer 都由模板决定，静态文本原样保留。内置 `DEFAULT_TEMPLATE` 与旧的本地渲染等价，且不作为表格行存在，同名行无法覆盖它。模板解析遇到未知变量、嵌套段或未闭合段时返回错误，生成流程回退内置 Default 并在通知里说明，不会丢掉模型结果。完整 Velocity 兼容（清单第 46 项）单独评估。
+
 ## 6. 交互流程
 
 1. 用户打开 Commit 工具窗或 Commit 对话框，勾选本次要提交的文件/变更块。
@@ -117,12 +136,12 @@ Closes #123
 2. 单次命令受宿主 60 秒后台任务上限约束；插件把首次请求和兼容重试放进共享的 50 秒预算，单次请求超时随剩余时间递减且不低于 8 秒。无流式输出。
 3. `pending_commit` / `set_commit_message` 只适用于可信项目，且必须从某个窗口的 command/event 调用。
 4. 多仓库项目会在 `changes` 中返回多个仓库的文件；分支与最近提交来自当前项目对应的仓库状态。
-5. 插件设置是 IDE 声明的多页设置，不支持任意 Web 设置页或条件字段，插件也不能写入设置值：模型列表选择通过剪贴板转交用户。
+5. 插件设置是 IDE 声明的多页设置，不支持任意 Web 设置页或条件字段，插件也不能写入设置值：模型列表选择通过剪贴板转交用户；档案管理由声明式表格完成，表格列只支持标量、不支持嵌套集合。四个密钥槽是 manifest 静态声明的上限，档案数量不受此限，但只有四个可独立密钥。模板实时预览与思考映射等条件界面（清单 11、12、26、27）需要另用命令动作或插件视图适配。
 6. 诊断摘要目前列出 token 字段、温度、尝试次数和兼容调整；思考参数与兼容结果缓存属于清单第二／三批（24–28、39 项），尚未接入，因此摘要中不含这两项。
 
 ## 8. 验证
 
-- `cargo test`：51 个单元测试（配置、CommitDraft 上下文、历史标题与受限项目降级、diff 裁剪、三种任务的 prompt、解析/渲染、三种协议响应解析、模型列表、兼容重试、请求诊断、生成并写回提交信息）。
+- `cargo test`：70 个单元测试（配置、命名档案与项目默认回退、CommitDraft 上下文、历史标题与受限项目降级、diff 裁剪、三种任务的 prompt、解析/模板渲染与错误回退、三种协议响应解析、密钥槽、模型列表、兼容重试、请求诊断、生成并写回提交信息）。
 - `cargo fmt --all --check`、`cargo clippy --all-targets -- -D warnings`。
 - `cargo build --release --target wasm32-wasip2`。
 - `openidea-plugin check .`（用 OpenIDEA 0.1.40 构建的 CLI）：manifest、贡献点、能力、wasm 组件全部通过，组件被识别为插件 API 1.4。

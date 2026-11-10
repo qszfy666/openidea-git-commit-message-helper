@@ -23,6 +23,8 @@ pub struct Strings {
     pub model_hint: &'static str,
     pub model_copy_failed: &'static str,
     pub request_url: &'static str,
+    pub key_slot: &'static str,
+    pub template_fallback: &'static str,
 }
 
 const ZH: Strings = Strings {
@@ -44,6 +46,8 @@ const ZH: Strings = Strings {
     model_hint: "模型 ID 已复制到剪贴板，请粘贴到 LLM Settings 的 Model。",
     model_copy_failed: "未能写入剪贴板，请手动把这个模型 ID 填到 LLM Settings 的 Model。",
     request_url: "请求地址",
+    key_slot: "密钥槽",
+    template_fallback: "模板无效，已用内置 Default 渲染：",
 };
 
 const EN: Strings = Strings {
@@ -65,6 +69,8 @@ const EN: Strings = Strings {
     model_hint: "The model id is in the clipboard; paste it into LLM Settings › Model.",
     model_copy_failed: "The clipboard could not be written; type this model id into LLM Settings › Model.",
     request_url: "Request URL",
+    key_slot: "Key slot",
+    template_fallback: "Invalid template; rendered with the built-in Default instead:",
 };
 
 pub fn strings(language: UiLanguage) -> &'static Strings {

@@ -25,11 +25,12 @@ const MAX_ATTEMPTS: u32 = 3;
 /// The connection test only needs a valid answer, not one worth reading.
 const TEST_TOKENS: u32 = 16;
 
-fn ensure_ready() -> Result<(), Error> {
-    if !host::secret_is_set("api-key") {
-        return Err(Error::Failed(
-            "No API key. In Settings › Plugins › Installed, select Git Commit Message Helper and fill in the LLM API key under Secrets.".into(),
-        ));
+fn ensure_ready(config: &Config) -> Result<(), Error> {
+    if !host::secret_is_set(&config.secret_slot) {
+        return Err(Error::Failed(format!(
+            "No API key in slot '{}'. In Settings › Plugins › Installed, select Git Commit Message Helper and fill in the matching LLM API key under Secrets.",
+            config.secret_slot
+        )));
     }
     Ok(())
 }
@@ -223,13 +224,21 @@ pub struct Answer {
     pub diagnostics: Diagnostics,
 }
 
+/// The host fills `{{secret:<slot>}}` in from the keychain on the way out.
+/// Only declared slots can be named, and the plugin never reads the value.
+fn secret_placeholder(config: &Config) -> String {
+    format!("{{{{secret:{}}}}}", config.secret_slot)
+}
+
 fn authorize(config: &Config, request: HttpRequest) -> HttpRequest {
+    let secret = secret_placeholder(config);
+    let bearer = format!("Bearer {secret}");
     match config.protocol {
         Protocol::Anthropic => request
-            .header("x-api-key", "{{secret:api-key}}")
+            .header("x-api-key", secret.as_str())
             .header("anthropic-version", "2023-06-01"),
         Protocol::OpenAiChat | Protocol::OpenAiResponses => {
-            request.header("Authorization", "Bearer {{secret:api-key}}")
+            request.header("Authorization", bearer.as_str())
         }
     }
 }
@@ -361,7 +370,7 @@ fn send(config: &Config, system: &str, user: &str, max_tokens: u32) -> Result<An
 
 /// Sends one generation request and returns the assistant's text.
 pub fn generate(config: &Config, system: &str, user: &str) -> Result<Answer, Error> {
-    ensure_ready()?;
+    ensure_ready(config)?;
     let answer = send(config, system, user, config.max_tokens)?;
     let text = extract_content(config.protocol, &answer.text)?;
     Ok(Answer { text, ..answer })
@@ -369,7 +378,7 @@ pub fn generate(config: &Config, system: &str, user: &str) -> Result<Answer, Err
 
 /// Sends a minimal request to check the configured endpoint, model and key.
 pub fn test(config: &Config) -> Result<Answer, Error> {
-    ensure_ready()?;
+    ensure_ready(config)?;
     ensure_model(config)?;
     let answer = send(config, "You are a connection test.", "ping", TEST_TOKENS)?;
     // A 2xx proves the endpoint, key and model; the body only has to be JSON.
@@ -387,7 +396,7 @@ pub fn test(config: &Config) -> Result<Answer, Error> {
 
 /// The model ids the endpoint lists, sorted, for the picker in Settings.
 pub fn models(config: &Config) -> Result<Vec<String>, Error> {
-    ensure_ready()?;
+    ensure_ready(config)?;
     let url = models_endpoint(config)?;
     let mut request = authorize(
         config,
@@ -510,7 +519,7 @@ pub fn extract_content(protocol: Protocol, body: &str) -> Result<String, Error> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{MessageLanguage, Provider};
+    use crate::config::{CommitType, MessageLanguage, Provider};
     use openidea_plugin::HttpResponse;
     use openidea_plugin::mock::MockHost;
 
@@ -525,8 +534,13 @@ mod tests {
             max_tokens: 4096,
             language: MessageLanguage::Auto,
             max_diff_chars: 12_000,
-            commit_types: vec!["feat".into()],
+            commit_types: vec![CommitType {
+                title: "feat".into(),
+                description: String::new(),
+            }],
             extra_prompt: String::new(),
+            secret_slot: "api-key".into(),
+            template: None,
         }
     }
 
@@ -606,6 +620,22 @@ mod tests {
             .unwrap(),
             "https://llm.example.com/v1/models"
         );
+    }
+
+    #[test]
+    fn a_profile_carries_its_own_secret_slot() {
+        let mut config = config(Provider::OpenAi, Protocol::OpenAiChat, "");
+        config.secret_slot = "{{SECRET_hhyvxk2c}}".into();
+        let chat = authorize(&config, HttpRequest::post("https://example.com", "{}"));
+        assert!(chat.headers.iter().any(|(name, value)| {
+            name == "Authorization" && value == "Bearer {{secret:{{SECRET_hhyvxk2c}}}}"
+        }));
+
+        config.protocol = Protocol::Anthropic;
+        let anthropic = authorize(&config, HttpRequest::post("https://example.com", "{}"));
+        assert!(anthropic.headers.iter().any(|(name, value)| {
+            name == "x-api-key" && value == "{{secret:{{SECRET_hhyvxk2c}}}}"
+        }));
     }
 
     #[test]

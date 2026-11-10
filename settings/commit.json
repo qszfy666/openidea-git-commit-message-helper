@@ -18,9 +18,28 @@
     "commitTypes": {
       "type": "array",
       "title": "Allowed commit types",
+      "description": "Title is the value the model must return; description explains when to pick it and is included in the prompt. Older string-only lists are still accepted.",
       "group": "Types",
-      "items": { "type": "string", "title": "Commit type" },
-      "default": ["feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"]
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "title": "Title", "default": "" },
+          "description": { "type": "string", "title": "Description", "default": "" }
+        }
+      },
+      "default": [
+        { "title": "feat", "description": "A new feature" },
+        { "title": "fix", "description": "A bug fix" },
+        { "title": "docs", "description": "Documentation only" },
+        { "title": "style", "description": "Formatting or style, no behaviour change" },
+        { "title": "refactor", "description": "Code change that neither fixes a bug nor adds a feature" },
+        { "title": "perf", "description": "Performance improvement" },
+        { "title": "test", "description": "Tests only" },
+        { "title": "build", "description": "Build system or dependencies" },
+        { "title": "ci", "description": "CI configuration" },
+        { "title": "chore", "description": "Maintenance tasks" },
+        { "title": "revert", "description": "Reverts an earlier commit" }
+      ]
     }
   }
 }

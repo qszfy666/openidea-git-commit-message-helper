@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.0
+
+迁移清单第二批的子批次 1（8–10、13–15、19、20、23）：把单份活动配置扩展为可复用的命名档案。第二批剩余条目（11、12、24–28）留在同一批的子批次 2。仍需要 OpenIDEA 0.1.40（插件 API 1.4）。
+
+- **模型档案**：LLM Settings 新增 **Model profiles** 表格与 **Active model profile**。每个档案独立保存 Provider、协议、Base URL、Model、Temperature、Send temperature 和 **Max response tokens**（23），可增删、改名、复制、排序。留空 Active model 时继续使用原有单份设置，0.6.x 的设置无需迁移。
+- **每档案独立密钥**（20）：manifest 预声明四个固定密钥槽（`api-key`、`api-key-2`、`api-key-3`、`api-key-4`），档案在 **Key slot** 列选择其中一个。密钥仍由系统钥匙串保存，插件读不到值；只检查活动档案对应的槽是否填写。
+- **提示词档案**：Prompts 页新增 **Prompt profiles** 表格与 **Default prompt profile**；选中档案的文本取代原来的额外系统提示词，输出约束继续生效。未选择时沿用 `extraPrompt`。
+- **输出模板**：新增 **Commit Templates** 页，含 **Commit templates** 表格与 **Default template**。模板用 `{{field}}` 变量与 `{{#field}}…{{/field}}` 条件段控制字段顺序、分隔符、可选段落和 footer；内置 **Default** 模板始终存在，同名表格行不会覆盖它。模板无效时回退到内置 Default，并在通知里写明原因。完整 Velocity 兼容（清单 46 项）仍单独评估。
+- **提交类型描述**：Commit 页的 **Allowed commit types** 改为「标题＋描述」表格，描述会写进 prompt 帮助模型选类型；旧的字符串数组和逗号分隔设置仍可读取，模型返回的 `type` 仍只按标题校验。
+- **项目默认选择**：Active model / Default prompt / Default template 都是普通设置键，项目层的值覆盖全局层；项目里留空即继承全局选择。档案表格本身也遵循宿主的 project-over-global 规则。
+- `cargo test` 从 51 个增加到 70 个，新增覆盖档案驱动请求、独立密钥槽、每档案 token 上限、提示词档案、模板渲染与回退、内置 Default 保护、类型描述，以及旧设置的回退路径。
+
+界面与真实端点行为仍未实测：以上由 SDK mock host 的行为测试、0.1.40 CLI 的包结构校验覆盖；声明式表格在 OpenIDEA 设置里的实际编辑体验、四个密钥槽的填写与真实服务端点仍需人工验证。
+
 ## 0.6.0
 
 迁移清单第一批（1、2、21、22、30、36、37、40、41）。需要 OpenIDEA 0.1.40：SDK 升到 `v0.1.40`，manifest 改为 `engines.openidea = "^1.4"`，`openidea-plugin check .` 用 0.1.40 的 CLI 验证，组件被识别为插件 API 1.4。
