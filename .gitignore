@@ -3,3 +3,5 @@
 *.key
 .DS_Store
 .pi/
+/paseo.json
+/.openidea/
