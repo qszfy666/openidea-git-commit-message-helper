@@ -9,13 +9,15 @@
 //! generation untouched.
 
 mod config;
+mod editor;
 mod git;
 mod llm;
 mod prompt;
 mod thinking;
 mod ui;
 
-use config::{Config, UiLanguage};
+use config::{Actions, Config, UiLanguage};
+use openidea_plugin::views::{View, ViewEvent, Viewport};
 use openidea_plugin::{
     Error, Invocation, NotificationLevel, PickItem, Plugin, host, register_plugin,
 };
@@ -23,8 +25,21 @@ use prompt::Task;
 
 const TITLE: &str = "Git Commit Message Helper";
 
+/// Writes the four button settings into the context keys `plugin.toml`'s `when`
+/// clauses read (checklist 6). Called at activation and whenever a setting
+/// changes, so a hidden button is hidden before the first command runs too.
+fn sync_action_context() {
+    for (key, visible) in Actions::load().context_keys() {
+        // A key is `plugin.<id>.<key>`; without a window it applies to all.
+        let _ = host::set_context(key, visible);
+    }
+}
+
 #[derive(Default)]
-pub struct CommitMessageHelper;
+pub struct CommitMessageHelper {
+    /// The manual structured editor's form (checklist 3).
+    editor: editor::Editor,
+}
 
 /// What one run asks the model for. The draft is read once, inside
 /// `generate`, so `Format` sees the message it is about to replace.
@@ -40,6 +55,9 @@ struct Generated {
     diagnostics: llm::Diagnostics,
     /// Why the built-in Default had to be used instead of a named template.
     template_error: Option<String>,
+    /// What the local quality check found (checklist 32); reported, never used
+    /// to rewrite the message.
+    quality: Vec<prompt::QualityIssue>,
 }
 
 impl Generated {
@@ -51,11 +69,40 @@ impl Generated {
             ui::clip(&self.message, 800),
             self.diagnostics.summary()
         );
+        if !self.quality.is_empty() {
+            let found = self
+                .quality
+                .iter()
+                .map(|issue| issue.text(strings))
+                .collect::<Vec<_>>()
+                .join(strings.list_separator);
+            body.push_str(&format!("\n\n{}: {found}", strings.quality_prefix));
+        }
         if let Some(error) = &self.template_error {
             body.push_str(&format!("\n\n{} {error}", strings.template_fallback));
         }
         body
     }
+}
+
+/// The file names and stems the commit touches: a subject that only repeats one
+/// of them says nothing about the change.
+fn changed_names(draft: &openidea_plugin::CommitDraft) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for change in &draft.changes {
+        let path = change
+            .path
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(&change.path);
+        let stem = path.rsplit_once('.').map_or(path, |(stem, _)| stem);
+        for name in [path, stem] {
+            if !name.is_empty() && !names.iter().any(|known| known == name) {
+                names.push(name.to_owned());
+            }
+        }
+    }
+    names
 }
 
 impl CommitMessageHelper {
@@ -116,6 +163,7 @@ impl CommitMessageHelper {
             };
             Ok(Generated {
                 message,
+                quality: prompt::quality_issues(&fields, &changed_names(&draft)),
                 diagnostics: answer.diagnostics,
                 template_error,
             })
@@ -351,6 +399,24 @@ impl Progress {
 }
 
 impl Plugin for CommitMessageHelper {
+    fn activate(&mut self, ctx: &openidea_plugin::Context) -> Result<(), Error> {
+        let _ = ctx;
+        // The buttons are gated by context keys, so a settings change has to
+        // reach a live instance; `on-startup-finished` sets them once.
+        host::subscribe(openidea_plugin::EventKind::SettingsChanged)?;
+        sync_action_context();
+        Ok(())
+    }
+
+    fn handle_events(&mut self, events: &[openidea_plugin::Event], _ctx: &Invocation) {
+        let settings_changed = events.iter().any(|event| {
+            matches!(event, openidea_plugin::Event::Other { kind, .. } if kind == "settings-changed")
+        });
+        if settings_changed {
+            sync_action_context();
+        }
+    }
+
     fn run_command(
         &mut self,
         id: &str,
@@ -384,6 +450,11 @@ impl Plugin for CommitMessageHelper {
                     .map(|g| g.notification(strings)),
             ),
             "models" => Self::report(strings, self.list_models(strings)),
+            "manual" => {
+                // The editor is a tool window; this command is its button.
+                host::reveal_view(editor::VIEW_ID)?;
+                Ok(None)
+            }
             "endpoint" => Self::report(strings, self.show_endpoint(strings)),
             "template-preview" => self.preview_template(strings),
             "template-help" => Self::report(strings, Ok(strings.template_help.to_owned())),
@@ -410,7 +481,36 @@ impl Plugin for CommitMessageHelper {
     }
 }
 
-register_plugin!(CommitMessageHelper);
+/// The key the editor keeps a draft under: one per project, so a draft typed
+/// in one repository never shows up in another.
+fn project_key(ctx: &Invocation) -> String {
+    ctx.project()
+        .and_then(|project| project.root().ok())
+        .unwrap_or_default()
+}
+
+impl openidea_plugin::views::Views for CommitMessageHelper {
+    /// The manual structured editor: a form of the seven commit fields.
+    fn render(
+        &mut self,
+        _view: &str,
+        _viewport: Option<Viewport>,
+        _ctx: &Invocation,
+    ) -> Result<View, Error> {
+        let strings = ui::strings(UiLanguage::load());
+        Ok(self
+            .editor
+            .render(&project_key(_ctx), &Config::load(), strings))
+    }
+
+    fn handle(&mut self, _view: &str, event: ViewEvent, _ctx: &Invocation) -> Result<(), Error> {
+        let strings = ui::strings(UiLanguage::load());
+        self.editor
+            .handle(&project_key(_ctx), event, &Config::load(), strings)
+    }
+}
+
+register_plugin!(CommitMessageHelper, views);
 
 #[cfg(test)]
 mod tests {
@@ -435,6 +535,61 @@ mod tests {
     }
 
     #[test]
+    fn the_four_buttons_follow_their_settings() {
+        let host = MockHost::install().with_capabilities(&["events"]);
+        let mut plugin = CommitMessageHelper::default();
+        plugin
+            .activate(&host.context("qszfy666.commit-message-helper"))
+            .expect("activation subscribes to settings changes");
+        let keys = host.context_keys();
+        for key in [
+            "actionGenerate",
+            "actionGenerateWithContext",
+            "actionFormat",
+            "actionManual",
+        ] {
+            assert_eq!(
+                keys.get(key),
+                Some(&openidea_plugin::ContextValue::Flag(true)),
+                "{key} is visible by default"
+            );
+        }
+
+        host.set_setting("actionFormat", "false");
+        host.set_setting("actionManual", "false");
+        plugin.handle_events(
+            &[openidea_plugin::Event::Other {
+                kind: "settings-changed".into(),
+                data: r#"["actionFormat","actionManual"]"#.into(),
+            }],
+            &host.invocation(),
+        );
+        let keys = host.context_keys();
+        assert_eq!(
+            keys.get("actionFormat"),
+            Some(&openidea_plugin::ContextValue::Flag(false)),
+            "the setting reaches the context key the menu reads"
+        );
+        assert_eq!(
+            keys.get("actionManual"),
+            Some(&openidea_plugin::ContextValue::Flag(false))
+        );
+        assert_eq!(
+            keys.get("actionGenerate"),
+            Some(&openidea_plugin::ContextValue::Flag(true)),
+            "the other buttons stay"
+        );
+    }
+
+    #[test]
+    fn the_manual_command_reveals_the_editor_view() {
+        let host = MockHost::install().with_capabilities(&["vcs.read", "vcs.write"]);
+        let result = CommitMessageHelper::default().run_command("manual", &host.invocation(), None);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(host.revealed_views(), vec![editor::VIEW_ID.to_owned()]);
+    }
+
+    #[test]
     fn generate_writes_the_pending_commit_message() {
         let host = MockHost::install().with_capabilities(&[
             "vcs.read",
@@ -455,7 +610,7 @@ mod tests {
             })
         });
 
-        let mut plugin = CommitMessageHelper;
+        let mut plugin = CommitMessageHelper::default();
         let result = plugin.run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         let updated = host.commit_draft().expect("the draft is still there");
@@ -556,7 +711,7 @@ mod tests {
             })
         });
 
-        let mut plugin = CommitMessageHelper;
+        let mut plugin = CommitMessageHelper::default();
         let result = plugin.run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(
@@ -579,7 +734,7 @@ mod tests {
         host.set_commit_draft(Some(draft_with_message("")));
         host.on_fetch(|_| Err(Error::Failed("network down".into())));
 
-        let mut plugin = CommitMessageHelper;
+        let mut plugin = CommitMessageHelper::default();
         let result = plugin.run_command("generate", &host.invocation(), None);
         assert!(
             result.is_ok(),
@@ -641,7 +796,11 @@ mod tests {
                     })
                 });
 
-                let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+                let result = CommitMessageHelper::default().run_command(
+                    "generate",
+                    &host.invocation(),
+                    None,
+                );
                 assert!(result.is_ok(), "{raw}: {result:?}");
                 assert_eq!(
                     host.commit_draft()
@@ -676,7 +835,7 @@ mod tests {
             })
         });
 
-        let mut plugin = CommitMessageHelper;
+        let mut plugin = CommitMessageHelper::default();
         let result = plugin.run_command("test", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         let shown = host.notifications();
@@ -722,7 +881,7 @@ mod tests {
             })
         });
 
-        let mut plugin = CommitMessageHelper;
+        let mut plugin = CommitMessageHelper::default();
         let result = plugin.run_command("generate-with-context", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(
@@ -745,7 +904,7 @@ mod tests {
         host.set_commit_draft(Some(draft_with_message("my own words")));
         host.answer_next_prompt(None);
 
-        let mut plugin = CommitMessageHelper;
+        let mut plugin = CommitMessageHelper::default();
         let result = plugin.run_command("generate-with-context", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(
@@ -792,7 +951,7 @@ mod tests {
             })
         });
 
-        let mut plugin = CommitMessageHelper;
+        let mut plugin = CommitMessageHelper::default();
         let result = plugin.run_command("format", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         let updated = host.commit_draft().expect("the draft is still there");
@@ -814,13 +973,57 @@ mod tests {
         host.set_secret("api-key", "test-key");
         host.set_commit_draft(Some(draft_with_message("")));
 
-        let mut plugin = CommitMessageHelper;
+        let mut plugin = CommitMessageHelper::default();
         let result = plugin.run_command("format", &host.invocation(), None);
         assert!(result.is_ok(), "the command reports instead: {result:?}");
         assert_eq!(host.requests().len(), 0, "an empty draft is not sent");
         assert_eq!(
             host.notifications().last().expect("it reports").level,
             NotificationLevel::Error
+        );
+    }
+
+    #[test]
+    fn a_weak_subject_is_reported_but_still_written() {
+        let host = MockHost::install().with_capabilities(&[
+            "vcs.read",
+            "vcs.write",
+            "secrets",
+            "net:api.deepseek.com",
+        ]);
+        host.set_secret("api-key", "test-key");
+        host.set_setting("commitTypes", r#"["fix"]"#);
+        host.set_setting("language", "\"English\"");
+        host.set_locale("en");
+        host.set_commit_draft(Some(draft_with_message("")));
+        host.on_fetch(|_| {
+            Ok(HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: br#"{"choices":[{"message":{"content":"{\"type\":\"fix\",\"subject\":\"fix bug\"}"}}]}"#.to_vec(),
+            })
+        });
+
+        let mut plugin = CommitMessageHelper::default();
+        let result = plugin.run_command("generate", &host.invocation(), None);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(
+            host.commit_draft()
+                .expect("the draft is still there")
+                .message,
+            "fix: fix bug",
+            "the quality check reports, it does not hold the message back"
+        );
+        let shown = host.notifications();
+        let body = &shown.last().expect("it reports").body;
+        assert!(
+            body.contains("Quality check") && body.contains("shorter than 12 columns"),
+            "the finding reaches the balloon: {body}"
+        );
+        assert_eq!(
+            host.requests().len(),
+            1,
+            "no second request: rewriting a weak subject is checklist 33"
         );
     }
 
@@ -851,7 +1054,7 @@ mod tests {
             })
         });
 
-        let mut plugin = CommitMessageHelper;
+        let mut plugin = CommitMessageHelper::default();
         let result = plugin.run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(host.requests().len(), 2, "one refusal, one retry");
@@ -895,7 +1098,7 @@ mod tests {
             })
         });
 
-        let mut plugin = CommitMessageHelper;
+        let mut plugin = CommitMessageHelper::default();
         let result = plugin.run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(host.requests().len(), 2, "one refusal, one retry");
@@ -930,7 +1133,7 @@ mod tests {
             })
         });
 
-        let mut plugin = CommitMessageHelper;
+        let mut plugin = CommitMessageHelper::default();
         let result = plugin.run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(host.requests().len(), 1, "no refusal, so no retry");
@@ -958,7 +1161,7 @@ mod tests {
             })
         });
 
-        let mut plugin = CommitMessageHelper;
+        let mut plugin = CommitMessageHelper::default();
         let result = plugin.run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "the command reports instead: {result:?}");
         assert_eq!(
@@ -995,7 +1198,7 @@ mod tests {
         let host = models_host();
         host.answer_next_prompt(Some(&["deepseek-reasoner"]));
 
-        let mut plugin = CommitMessageHelper;
+        let mut plugin = CommitMessageHelper::default();
         let result = plugin.run_command("models", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(
@@ -1013,7 +1216,7 @@ mod tests {
         let host = models_host();
         host.answer_next_prompt(None);
 
-        let mut plugin = CommitMessageHelper;
+        let mut plugin = CommitMessageHelper::default();
         let result = plugin.run_command("models", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(host.clipboard(), None);
@@ -1027,7 +1230,7 @@ mod tests {
     fn the_endpoint_command_shows_the_url_the_request_goes_to() {
         let host = MockHost::install().with_capabilities(&[]);
 
-        let mut plugin = CommitMessageHelper;
+        let mut plugin = CommitMessageHelper::default();
         let result = plugin.run_command("endpoint", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         let shown = host.notifications();
@@ -1067,7 +1270,7 @@ mod tests {
             })
         });
 
-        let result = CommitMessageHelper.run_command("test", &host.invocation(), None);
+        let result = CommitMessageHelper::default().run_command("test", &host.invocation(), None);
         assert!(result.is_ok(), "the connection works: {result:?}");
         assert_eq!(
             host.notifications().last().unwrap().level,
@@ -1087,7 +1290,7 @@ mod tests {
             })
         });
 
-        let result = CommitMessageHelper.run_command("test", &host.invocation(), None);
+        let result = CommitMessageHelper::default().run_command("test", &host.invocation(), None);
         assert!(result.is_err(), "a non-JSON answer is not a passing test");
     }
 
@@ -1137,7 +1340,8 @@ mod tests {
             })
         });
 
-        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+        let result =
+            CommitMessageHelper::default().run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(host.requests().len(), 1, "one request to the profile");
         assert_eq!(host.commit_draft().unwrap().message, "fix: fix crash");
@@ -1168,7 +1372,8 @@ mod tests {
             })
         });
 
-        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+        let result =
+            CommitMessageHelper::default().run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(host.requests().len(), 1, "the profile's key is enough");
         assert_eq!(host.commit_draft().unwrap().message, "fix: fix crash");
@@ -1206,7 +1411,8 @@ mod tests {
             })
         });
 
-        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+        let result =
+            CommitMessageHelper::default().run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(host.commit_draft().unwrap().message, "fix: fix crash");
     }
@@ -1237,7 +1443,8 @@ mod tests {
             })
         });
 
-        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+        let result =
+            CommitMessageHelper::default().run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(
             host.commit_draft().unwrap().message,
@@ -1265,7 +1472,8 @@ mod tests {
             })
         });
 
-        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+        let result =
+            CommitMessageHelper::default().run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(host.commit_draft().unwrap().message, "fix: fix crash");
         let shown = host.notifications();
@@ -1296,7 +1504,8 @@ mod tests {
             })
         });
 
-        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+        let result =
+            CommitMessageHelper::default().run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         let message = host.commit_draft().unwrap().message;
         assert_eq!(message, "fix: fix crash");
@@ -1330,7 +1539,8 @@ mod tests {
             })
         });
 
-        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+        let result =
+            CommitMessageHelper::default().run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(
             host.commit_draft().unwrap().message,
@@ -1361,7 +1571,8 @@ mod tests {
             })
         });
 
-        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+        let result =
+            CommitMessageHelper::default().run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(host.commit_draft().unwrap().message, "fix: fix crash");
     }
@@ -1384,7 +1595,11 @@ mod tests {
         ]));
         host.answer_next_prompt(None);
 
-        let result = CommitMessageHelper.run_command("template-preview", &host.invocation(), None);
+        let result = CommitMessageHelper::default().run_command(
+            "template-preview",
+            &host.invocation(),
+            None,
+        );
         assert!(result.is_ok(), "{result:?}");
         let shown = host.notifications();
         let notice = shown.last().expect("a preview is shown");
@@ -1408,7 +1623,11 @@ mod tests {
         host.answer_next_prompt(Some(&["{{unknown}}"]));
         host.answer_next_prompt(None);
 
-        let result = CommitMessageHelper.run_command("template-preview", &host.invocation(), None);
+        let result = CommitMessageHelper::default().run_command(
+            "template-preview",
+            &host.invocation(),
+            None,
+        );
         assert!(result.is_ok(), "{result:?}");
         let shown = host.notifications();
         let notice = shown.last().expect("the error is shown");
@@ -1425,7 +1644,8 @@ mod tests {
     #[test]
     fn template_help_lists_variables_and_the_restore_entry() {
         let host = MockHost::install();
-        let result = CommitMessageHelper.run_command("template-help", &host.invocation(), None);
+        let result =
+            CommitMessageHelper::default().run_command("template-help", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         let shown = host.notifications();
         let notice = shown.last().expect("the help is shown");
@@ -1461,7 +1681,8 @@ mod tests {
             r#"[{"name":"Reasoner","thinkingLevel":"ENABLED","thinkingPreset":"custom","thinkingMapping":"{\"ENABLED\":{\"enable_thinking\":true}}"}]"#,
         );
         host.set_setting("activeModel", "\"Reasoner\"");
-        let result = CommitMessageHelper.run_command("thinking-levels", &host.invocation(), None);
+        let result =
+            CommitMessageHelper::default().run_command("thinking-levels", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         let shown = host.notifications();
         let notice = shown.last().expect("the levels are shown");
@@ -1477,7 +1698,8 @@ mod tests {
             r#"[{"name":"Reasoner","thinkingLevel":"LOW","thinkingPreset":"custom","thinkingMapping":"{\"ENABLED\":{\"enable_thinking\":true}}"}]"#,
         );
         host.set_setting("activeModel", "\"Reasoner\"");
-        let result = CommitMessageHelper.run_command("thinking-levels", &host.invocation(), None);
+        let result =
+            CommitMessageHelper::default().run_command("thinking-levels", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         let shown = host.notifications();
         let notice = shown.last().expect("the warning is shown");
@@ -1491,7 +1713,8 @@ mod tests {
         let host = MockHost::install().with_capabilities(&["clipboard"]);
         host.set_setting("thinkingPreset", "\"openai-effort\"");
         host.set_setting("thinkingMapping", "\"[]\"");
-        let result = CommitMessageHelper.run_command("thinking-help", &host.invocation(), None);
+        let result =
+            CommitMessageHelper::default().run_command("thinking-help", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert!(
             host.clipboard().unwrap().contains("reasoning_effort"),
@@ -1531,7 +1754,8 @@ mod tests {
             })
         });
 
-        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+        let result =
+            CommitMessageHelper::default().run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         let shown = host.notifications();
         let notice = shown.last().expect("the diagnostics are shown");
@@ -1565,7 +1789,8 @@ mod tests {
             })
         });
 
-        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+        let result =
+            CommitMessageHelper::default().run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         let shown = host.notifications();
         let notice = shown.last().expect("the diagnostics are shown");
@@ -1602,7 +1827,8 @@ mod tests {
                 })
             });
 
-            let result = CommitMessageHelper.run_command("test", &host.invocation(), None);
+            let result =
+                CommitMessageHelper::default().run_command("test", &host.invocation(), None);
             assert!(result.is_ok(), "{preset}: {result:?}");
         }
     }
@@ -1631,7 +1857,8 @@ mod tests {
                 })
             });
 
-            let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+            let result =
+                CommitMessageHelper::default().run_command("generate", &host.invocation(), None);
             assert!(result.is_ok(), "{result:?}");
             assert_eq!(host.commit_draft().unwrap().message, "fix: fix crash");
             let shown = host.notifications();
@@ -1644,7 +1871,11 @@ mod tests {
     #[test]
     fn restore_default_copies_the_built_in_template() {
         let host = MockHost::install().with_capabilities(&["clipboard"]);
-        let result = CommitMessageHelper.run_command("template-default", &host.invocation(), None);
+        let result = CommitMessageHelper::default().run_command(
+            "template-default",
+            &host.invocation(),
+            None,
+        );
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(host.clipboard().as_deref(), Some(prompt::DEFAULT_TEMPLATE));
         let shown = host.notifications();

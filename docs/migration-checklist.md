@@ -16,7 +16,7 @@
 
 基线依据见 [参考源码](https://github.com/AutismSuperman/git-commit-message-helper/tree/d71db758f23c3264272e5c5c39d1f2fdc43279b7)、[当前依赖](../Cargo.toml)、[当前 manifest](../plugin.toml) 和 [OpenIDEA 0.1.40 发布说明](https://github.com/l0ng-ai/openidea/releases/tag/v0.1.40)。
 
-状态标记（0.6.0 第一批、0.7.0 第二批子批次 1、0.7.1 第二批子批次 2）：编号列的 `✅` 表示已完成，`◐` 表示部分完成，无标记即尚未开始；批次表的标记表示整批进度（第一批 ✅、第二批 ✅ 全部完成）。逐项说明见文末「第一批实施记录」与「第二批实施记录」。基线表及未标记条目仍是 2026-11-10 的分析快照。
+状态标记（0.6.0 第一批、0.7.0 第二批子批次 1、0.7.1 第二批子批次 2、0.8.0 第三批与按需条目）：编号列的 `✅` 表示已完成，`◐` 表示部分完成，无标记即尚未开始；批次表的标记表示整批进度（第一批 ✅、第二批 ✅、第三批 ✅ 已完成本轮选定范围，部分条目与后续功能见实施记录）。逐项说明见文末各批「实施记录」。当前 47 项中 36 项完成、2 项部分完成（16、47）、9 项未开始（4、31、33、38、42–46）。基线表及未标记条目仍是 2026-11-10 的分析快照。
 
 当前已覆盖以下能力，后续功能可复用现有实现。
 
@@ -44,11 +44,11 @@
 | --- | --- | --- | --- |
 | 1 ✅ | 带附加要求生成 | 新增多行输入，填写本次业务背景、Bug 说明、issue、Skip CI 要求 | P0 |
 | 2 ✅ | 格式化现有提交草稿 | 把当前消息与所选 diff 一起交给模型，重写为规范字段 | P0 |
-| 3 | 手动结构化编辑器 | 提供七个字段的表单，填写后本地渲染并写回 | P1 |
+| 3 ✅ | 手动结构化编辑器 | 提供七个字段的表单，填写后本地渲染并写回 | P1 |
 | 4 | Smart Echo 智能回填 | 将已有提交文本通过 LLM 解析回字段，再进入结构化编辑器 | P1 |
-| 5 | 手动编辑草稿恢复 | 取消结构化编辑时按项目保留字段，下次继续，确认应用后清除 | P1 |
-| 6 | 每个动作独立显隐 | 设置中控制生成、附加要求生成、格式化、手动创建四个按钮，通过 `when` 和 context key 映射 | P1 |
-| 7 | 每个动作独立图标 | 为四个动作配置不同图标，API 1.4 可接入 | P1 |
+| 5 ✅ | 手动编辑草稿恢复 | 取消结构化编辑时按项目保留字段，下次继续，确认应用后清除 | P1 |
+| 6 ✅ | 每个动作独立显隐 | 设置中控制生成、附加要求生成、格式化、手动创建四个按钮，通过 `when` 和 context key 映射 | P1 |
+| 7 ✅ | 每个动作独立图标 | 为四个动作配置不同图标，API 1.4 可接入 | P1 |
 
 参考实现见 [动作注册](https://github.com/AutismSuperman/git-commit-message-helper/blob/d71db758f23c3264272e5c5c39d1f2fdc43279b7/src/main/resources/META-INF/plugin.xml)、[附加要求动作](https://github.com/AutismSuperman/git-commit-message-helper/blob/d71db758f23c3264272e5c5c39d1f2fdc43279b7/src/main/java/com/fulinlin/action/GenerateCommitWithAdditionalContextAction.java)、[格式化动作](https://github.com/AutismSuperman/git-commit-message-helper/blob/d71db758f23c3264272e5c5c39d1f2fdc43279b7/src/main/java/com/fulinlin/action/FormatCommitByLlmAction.java) 和 [手动创建与 Smart Echo](https://github.com/AutismSuperman/git-commit-message-helper/blob/d71db758f23c3264272e5c5c39d1f2fdc43279b7/src/main/java/com/fulinlin/action/CreateCommitAction.java)。
 
@@ -64,9 +64,9 @@
 | 13 ✅ | 多提示词档案 | 保存不同写作偏好，支持新建、重命名、编辑、删除 | P0 |
 | 14 ✅ | 全局和项目默认提示词 | 当前已有项目设置覆盖机制，可进一步选择命名档案 | P0 |
 | 15 ✅ | 提交类型描述 | 将字符串类型扩展为“标题＋描述”，供编辑器和模型使用 | P1 |
-| 16 | 类型展示样式 | 下拉框、单选列表、混合模式，以及常用类型显示数量 | P2 |
-| 17 | 编辑字段显隐 | 控制类型、scope、正文、breaking change、issue、Skip CI 等字段 | P2 |
-| 18 | Skip CI 预设与默认值 | 选择不同标记，设置默认选项、默认勾选状态和下拉框显示 | P1 |
+| 16 ◐ | 类型展示样式 | 下拉框、单选列表、混合模式，以及常用类型显示数量 | P2 |
+| 17 ✅ | 编辑字段显隐 | 控制类型、scope、正文、breaking change、issue、Skip CI 等字段 | P2 |
+| 18 ✅ | Skip CI 预设与默认值 | 选择不同标记，设置默认选项、默认勾选状态和下拉框显示 | P1 |
 
 类型列表的排序当前已支持。参考项目的 emoji 类型可通过自定义标题表达，迁移重点在描述、示例和编辑体验。第 16–18 项依赖手动编辑器，第 4 项的 Smart Echo 也依赖该编辑路径。
 
@@ -86,7 +86,7 @@
 | 26 ✅ | 自定义思考 JSON 映射 | 按模型与协议配置请求片段，并校验格式、深度及保留字段 | P1 |
 | 27 ✅ | 思考等级随映射变化 | 映射只配置启用时，界面仅提供相应等级 | P1 |
 | 28 ✅ | 思考 token budget 校验 | 解析预算占位符，检查预算与最大响应 token 的关系 | P1 |
-| 29 | 自定义提交信息语言 | 当前固定中英文，可扩展为语言名称输入或更多选项 | P1 |
+| 29 ✅ | 自定义提交信息语言 | 当前固定中英文，可扩展为语言名称输入或更多选项 | P1 |
 
 模型档案中的密钥需要通过宿主 secret 管理。声明式设置可表达档案表格，思考映射等条件界面需要结合插件视图设计。思考等级和映射应按具体端点、模型及协议配置，模型默认选项表示使用服务端默认参数。
 
@@ -98,15 +98,15 @@
 | --- | --- | --- | --- |
 | 30 ✅ | 最近提交风格参考 | 原作读取最近五条标题，API 1.4 的 `vcs_log` 可提供上下文 | P0 |
 | 31 | JSON 修复请求 | 响应不完整或解析失败时，携带原因请求模型修复一次 | P1 |
-| 32 | 生成质量检查 | 对空泛标题、仅文件名等结果做本地检查，当前主要靠 prompt 约束 | P1 |
+| 32 ✅ | 生成质量检查 | 对空泛标题、仅文件名等结果做本地检查，当前主要靠 prompt 约束 | P1 |
 | 33 | 质量纠正请求 | 根据质量检查结果，要求模型重写一次 | P1 |
-| 34 | 字段规范化 | 补充标题尾标点、标识符和重复 `Closes`、`BREAKING CHANGE` 前缀处理 | P1 |
-| 35 | 单行多句正文转列表 | 当前主要按换行整理，原作还按句号、分号拆分多项描述 | P2 |
+| 34 ✅ | 字段规范化 | 补充标题尾标点、标识符和重复 `Closes`、`BREAKING CHANGE` 前缀处理 | P1 |
+| 35 ✅ | 单行多句正文转列表 | 当前主要按换行整理，原作还按句号、分号拆分多项描述 | P2 |
 | 36 ✅ | Token 参数兼容 | 支持 `max_completion_tokens`，服务端明确拒绝时调整字段 | P0 |
 | 37 ✅ | Temperature 兼容 | 根据模型配置省略温度，或在服务端明确拒绝后调整请求 | P0 |
 | 38 | 思考参数兼容重试 | 明确拒绝映射字段时移除该覆盖并重试 | P1 |
-| 39 | 兼容结果缓存 | 记住端点、模型、协议及思考映射的拒绝结果 | P1 |
-| 40 ◐ | 请求诊断摘要 | 显示实际 token 字段、思考参数、尝试次数、兼容调整和缓存命中 | P0 |
+| 39 ✅ | 兼容结果缓存 | 记住端点、模型、协议及思考映射的拒绝结果 | P1 |
+| 40 ✅ | 请求诊断摘要 | 显示实际 token 字段、思考参数、尝试次数、兼容调整和缓存命中 | P0 |
 | 41 ✅ | 更详细的连接测试 | 当前显示 HTTP 状态与模型，可加入上述诊断摘要和界面测试状态 | P0 |
 
 参考实现见 [生成、修复及质量纠正](https://github.com/AutismSuperman/git-commit-message-helper/blob/d71db758f23c3264272e5c5c39d1f2fdc43279b7/src/main/java/com/fulinlin/service/LlmCommitService.java)、[协议参数调整](https://github.com/AutismSuperman/git-commit-message-helper/blob/d71db758f23c3264272e5c5c39d1f2fdc43279b7/src/main/java/com/fulinlin/service/OpenAiCompatibleLlmProviderClient.java)、[兼容缓存](https://github.com/AutismSuperman/git-commit-message-helper/blob/d71db758f23c3264272e5c5c39d1f2fdc43279b7/src/main/java/com/fulinlin/service/LlmCapabilityCache.java)、[诊断摘要](https://github.com/AutismSuperman/git-commit-message-helper/blob/d71db758f23c3264272e5c5c39d1f2fdc43279b7/src/main/java/com/fulinlin/service/LlmRequestDiagnostics.java) 和 [VCS 接口](https://github.com/l0ng-ai/openidea/blob/v0.1.40/sdk/rust/openidea-plugin/wit/workspace.wit)。
@@ -120,7 +120,7 @@
 | 44 | 原按钮切换为停止按钮 | 参考项目动态修改动作图标和状态，OpenIDEA 当前未暴露同等接口 | 先使用宿主任务取消 |
 | 45 | 生成期间锁定提交输入框 | 原作直接控制 IntelliJ 编辑器只读状态，OpenIDEA 未提供对应控制 | 当前采用 revision 写回保护 |
 | 46 | 完整 Velocity 模板兼容 | 包括条件、变量及 `$velocityTool` 字符串方法，需设计 Rust/WASM 兼容范围 | 单独评估 |
-| 47 | 日文、韩文及完整界面本地化 | 原作有中英日韩资源，当前通知为中英文，设置和命令文案需要补齐 | P2 |
+| 47 ◐ | 日文、韩文及完整界面本地化 | 原作有中英日韩资源，当前通知为中英文，设置和命令文案需要补齐 | P2 |
 
 参考实现见 [历史提交上下文](https://github.com/AutismSuperman/git-commit-message-helper/blob/d71db758f23c3264272e5c5c39d1f2fdc43279b7/src/main/java/com/fulinlin/service/GitContextService.java)、[提交面板控制](https://github.com/AutismSuperman/git-commit-message-helper/blob/d71db758f23c3264272e5c5c39d1f2fdc43279b7/src/main/java/com/fulinlin/action/CommitPanelActionSupport.java)、[Velocity 渲染](https://github.com/AutismSuperman/git-commit-message-helper/blob/d71db758f23c3264272e5c5c39d1f2fdc43279b7/src/main/java/com/fulinlin/utils/VelocityUtils.java) 和 [本地化资源](https://github.com/AutismSuperman/git-commit-message-helper/tree/d71db758f23c3264272e5c5c39d1f2fdc43279b7/src/main/resources/i18n)。平台约束见 [网络定义](https://github.com/l0ng-ai/openidea/blob/v0.1.40/sdk/rust/openidea-plugin/wit/io.wit)、[提交接口](https://github.com/l0ng-ai/openidea/blob/v0.1.40/sdk/rust/openidea-plugin/wit/commit.wit) 和 [提交工具栏实现](https://github.com/l0ng-ai/openidea/blob/v0.1.40/src/features/vcs/CommitView.tsx)。
 
@@ -140,13 +140,13 @@
 | --- | --- | --- |
 | 第一批 ✅ | 改善现有生成流程 | 1、2、21、22、30、36、37、40、41，即附加要求、草稿格式化、模型列表、地址预览、历史风格、基础参数兼容和诊断 |
 | 第二批 ✅ | 完善配置复用 | 8–15、19、20、23–28，即多模型档案、思考参数、模板和提示词档案及项目默认选择。子批次 1（0.7.0）完成 8–10、13–15、19、20、23；子批次 2（0.7.1）完成 11、12、24–28 |
-| 第三批 | 补齐手动编辑路径和其他体验 | 3–7、16–18，以及按需选择的质量、语言和本地化条目 |
+| 第三批 ✅ | 补齐手动编辑路径和其他体验 | 3、5–7、17、18，以及按需选择的 29、32、34、35、39、40；16、47 部分完成，4 留待后续 |
 
 接入 API 1.4 能力前，需要把 SDK 切换到 `v0.1.40`，同步更新 manifest 的 API 要求、兼容性说明和相关测试。原生提交选择、三种协议、secret 使用和 revision 写回保护是各批次共同的回归验证入口。已有架构说明见 [design.md](design.md)。
 
 ## 第一批实施记录（0.6.0）
 
-上方各表编号列的 `✅` / `◐` 与本节逐项对应：第一批 9 项已在 0.6.0 实施，其中 40 为部分完成。SDK 升到 `v0.1.40`，`engines.openidea = "^1.4"`，`openidea-plugin check .`（0.1.40 CLI）通过，组件被识别为插件 API 1.4。上方基线表仍是 2026-11-10 的分析快照，未改写。
+上方各表编号列的 `✅` / `◐` 与本节逐项对应：第一批 9 项已在 0.6.0 实施，其中 40 在 0.6.0 为部分完成，0.8.0 接入兼容结果缓存（39）后收口。SDK 升到 `v0.1.40`，`engines.openidea = "^1.4"`，`openidea-plugin check .`（0.1.40 CLI）通过，组件被识别为插件 API 1.4。上方基线表仍是 2026-11-10 的分析快照，未改写。
 
 | 条目 | 实现入口 | 适配与边界 |
 | --- | --- | --- |
@@ -157,7 +157,7 @@
 | 30 | `git::build_context` 的 `recent_subjects`、prompt 的 Recent Commit Subjects 段 | `vcs_log(None, 5)` 只作风格参考；未使用 `vcs_diff()`；受限项目自动省略；数据范围说明已同步到 design.md 第 3 节与两份 README |
 | 36 | `llm::RequestShape` | 4xx 明确拒绝 `max_tokens` 且要求 `max_completion_tokens` 时切换；未提供主动配置该字段的开关 |
 | 37 | `sendTemperature` 设置 + 拒绝重试 | 两条路径都做了；Anthropic 与 Responses 不调整 token 字段 |
-| 40 ◐ | `llm::Diagnostics` | 列出请求地址、token 字段及值、温度、尝试次数、兼容调整；0.7.1 起也列出实际发送或省略的思考参数（24–28 项）。**缓存命中仍未纳入**，依赖第 39 项，因此保持部分完成 |
+| 40 ✅ | `llm::Diagnostics` | 列出请求地址、token 字段及值、温度、尝试次数、兼容调整；0.7.1 起也列出实际发送或省略的思考参数（24–28 项）。缓存命中当时仍未纳入，依赖第 39 项；第 39 项在 0.8.0 完成后该行随之收口 |
 | 41 | `test` 命令通知 | HTTP 状态与模型之外附诊断摘要；失败仍由设置页内联显示 |
 
 清单末尾的时间预算约束已落实：首次请求与兼容重试共享 50 秒预算，剩余不足 8 秒不再发起请求，最多三次尝试；JSON 修复与质量纠正（31、33）不在本批，未串联。清单列出的共同回归入口（原生提交选择、三种协议、secret、revision 写回保护）均有测试覆盖，共 51 个单元测试。
@@ -243,3 +243,43 @@ pnpm vitest run src/features/plugins/__tests__/settings.test.tsx
 pnpm typecheck
 pnpm build
 ```
+
+## 第三批与按需条目实施记录（0.8.0）
+
+本轮完成第三批选定的 3、5–7、17、18，以及按需条目 29、32、34、35、39、40；16 和 47 部分完成，4 留待后续。40 由部分完成收口为完成。界面适配方式沿用「声明式设置 + 页面动作」，并首次引入视图（`[[contributes.views]]`）作为手动编辑器的载体；新增 `storage` 与 `events` 两个低风险能力。验收沿用既有五道门禁（cargo test / fmt / clippy / wasm build / 0.1.40 CLI check）。
+
+| 条目 | 实现入口 | 适配与边界 |
+| --- | --- | --- |
+| 3 ✅ | `src/editor.rs`、`[[contributes.views]] id = "commit-editor"`、`manual` 命令、`register_plugin!(P, views)` | 工具窗表单承载七个字段；`Write to commit message` 用活动模板本地渲染后按 `revision` 写回，与生成共用同一保护。文本字段事件更新状态和草稿并保留输入控件，选择框和复选框事件刷新视图以显示新值；写回前复用生成路径的标题约束 |
+| 5 ✅ | `Editor::open`/`keep`/`forget`、`host::storage`、键 `editor:<项目根>` | 按项目保留草稿，跨实例重建（宿主空闲回收）后仍在；确认应用或清空表单即删除。项目根为空时不落盘 |
+| 6 ✅ | `config::Actions`、`sync_action_context`、`Plugin::activate` + `handle_events`、`activation = ["on-startup-finished"]`、四处菜单 `when` | 四个开关写成 `plugin.<id>.<key>`，菜单 `when` 读同名键。启动即写，避免「按钮隐藏后插件永不激活」的死锁；`settings-changed` 事件让改动即时生效。隐藏仅移除工具栏入口，Find Action 仍可运行 |
+| 7 ✅ | `icons/generate.svg`、`icons/manual.svg`、四个命令各自的 `icon` | 四个动作使用不同图标与清单图标区分 |
+| 16 ◐ | `settings/commit.json` 的 `editorTypeStyle`、`editorCommonTypes`、`config::EditorSettings::type_options` | 实现表格顺序与「常用类型置顶 + 其余按字母排序」及数量；宿主 `form` 的选择项只渲染下拉框，无单选列表/混合控件，故样式部分记为未完成 |
+| 17 ✅ | `editorShowType`/`Scope`/`Body`/`Changes`/`Closes`/`SkipCi` 六个开关、`Editor::render` | 隐藏的字段不渲染，提交字段仍保留既有值；subject 始终显示（它是提交的必要字段） |
+| 18 ✅ | `skipCiPresets` 表格、`skipCiDefault`、`skipCiDefaultChecked`、选择项 + 复选框 | 预设在表单里是下拉 + 独立的「写入该标记」复选框；未勾选时不写入分类字段。默认值可按预设名或直接写标记，写不在表格里的标记会补一行 |
+| 29 ✅ | `settings/commit.json` 的 `language` 改 `string`、`config::prompt_language` | 任意语言名称原样进入 prompt；`auto` 按界面语言解析（含日/韩），`Chinese`/`English` 保留为长名快捷值；进入处去掉控制字符并限长 40 字符 |
+| 32 ✅ | `prompt::quality_issues`、`QualityIssue`、`Generated::notification` | 空泛标题、仅文件名、不足 12 列三判据；只在通知里列出，不改写、不追加请求。参考项目「subject < 12 字符」会误判常见短中文标题，改为列宽（CJK 计两列） |
+| 34 ✅ | `prompt::normalize`、`normalize_subject`/`normalize_closes`/`normalize_identifier` | 小写标识符、去标题尾标点、去 `Closes` 前缀并去重、去 `BREAKING CHANGE:` 前缀。含控制字符的标识符仍按原规则拒绝，不做静默修复（未放宽既有校验） |
+| 35 ✅ | `prompt::split_sentences`、`normalize_body` | 单行正文按 `。！？；!?;` 切分；ASCII 句点仅在后面开始新句时切分（`1.5`、`e.g.` 不切）；单句保持纯文本；CJK 句尾标点去掉、ASCII 句点保留 |
+| 39 ✅ | `llm::Cached`、`cache_key`（端点+模型+协议+映射+温度配置的 FNV-1a）、`cached_shape`/`remember_shape` | 命中后首请求即按已接受形状发送，不再重复被拒参数；缓存随插件存储持久化，规避 WASM 实例被回收的问题；模型、端点或温度配置变化即为另一条缓存 |
+| 40 ✅ | `llm::Diagnostics::cached` 与 `summary` | 诊断新增 `cached:` 一栏，列出由缓存直接应用（而非本次重试）的参数；配合 39 收口为完成 |
+| 47 ◐ | `locales/ja.json`、`locales/ko.json`、`ui::Strings` 的 JA/KO 两份、`UiLanguage::{Ja,Ko}` | 词条覆盖命令、视图、设置页与属性标题；通知与对话框文案在代码里按 `host::locale()` 选择。设置项说明文字仍为英文（宿主对无词条文本回退原文），完整本地化仍可继续补 |
+
+`cargo test` 从 96 个增加到 127 个，新增覆盖：规范化与断句、质量判据、语言解析与回退、编辑器渲染/写回/显隐/排序/预设、按项目草稿与清除、动作显隐与 `settings-changed`、缓存命中与按模型/端点分片、四种界面语言文案。
+
+边界与未完成项：16 的样式部分（单选列表、混合模式）需要宿主提供下拉之外的控件；47 只覆盖标题类文案。清单 4（Smart Echo）、31（JSON 修复）、33（质量纠正）、38（思考参数兼容重试）与 42–46 仍未实现或仍待平台支持；本轮没有新增请求路径，50 秒共享预算的结论未变。
+
+界面与真实端点行为仍需实测：工具窗表单在 OpenIDEA 0.1.40 上的渲染、字段事件与 `reveal_view`、四个按钮的 `when` 生效、日韩文案在设置页的实际展示，以及真实服务端点上的缓存复用。
+
+
+第三批验收修复记录。
+
+- 类型、Skip CI 下拉框和复选框变更后刷新视图，文本输入不主动刷新，保留宿主输入状态。
+- 手动写回与模型输出复用标题约束，非法类型、scope 或标题会提示并保留原提交信息和表单草稿。四种语言的提示均明确 Apply 会替换已有文本，读取后的草稿变化继续受 revision 保护。
+- 正文只去掉明确的列表符号加空白前缀，保留 `--force`、`-1`、`*ptr` 等实际内容。
+- 温度配置加入兼容缓存标识，修改温度后重新发送新值，同配置继续复用拒绝结果。
+- 命令只受仓库可用条件限制，按钮开关只控制提交工具栏菜单，因此隐藏按钮后 Find Action 和快捷键仍可运行；手动编辑命令补上独立图标。
+- 第 47 项改为部分完成，整体统计调整为 36 项完成、2 项部分完成、9 项未开始。
+- 新增 5 项测试，其中 4 项先因目标缺陷失败，修复后通过；另 1 项确认文本输入不刷新。此前只计 Apply 刷新的旧断言同步改为精确验证类型选择与 Apply 各刷新一次。
+
+- 修复后的 127 个测试、fmt、Clippy、WASM 构建与 OpenIDEA 0.1.40 CLI 包检查通过。宿主真实 React 控件验证了下拉框更新及复选框勾选/取消；以当前 manifest 为输入的宿主条件检查确认隐藏按钮后 Find Action 和快捷键仍可用，共 2 项隔离检查通过。完整桌面进程和真实服务端点尚未实测。

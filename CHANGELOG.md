@@ -1,11 +1,35 @@
 # Changelog
 
-## Unreleased
+## 0.8.0
 
-- Budgeted thinking connection tests use the profile's response limit, keeping `thinking.budget_tokens` below the actual request limit. Other probes retain the 16-token limit.
-- Empty or whitespace-only template results fall back to the built-in Default and report the template error, preserving a nonempty generated message.
-- Thinking placeholders are checked by JSON path segments, so literal dotted keys cannot masquerade as nested budget fields.
-- The accompanying OpenIDEA 0.1.40 host patch restores old settings before strict validation and adds a Duplicate action to settings tables. The commit-type schema opts into legacy string-list migration through `legacyStringKey`.
+迁移清单第三批与按需条目：3、5、6、7、16（部分）、17、18、29、32、34、35、39、40、47（部分）。仍需要 OpenIDEA 0.1.40（插件 API 1.4）；新增 `storage` 与 `events` 两个低风险能力。
+
+- **手动结构化编辑器**（3）：新增 **Commit Message Editor** 工具窗（`[[contributes.views]]`，本项目第一个视图），是七个提交字段的表单。**Write to commit message** 用当前活动模板在本地渲染，不调用模型，再按与生成相同的 `revision` 校验写进提交信息框。提交信息上方新增 **Edit Commit Message Fields** 按钮打开该视图。
+- **字段显隐与类型排序**（17、16）：Commit 页 Editors 组可隐藏 type / scope / body / breaking change / closes / Skip CI（subject 始终显示）；**Type option order** 支持表格顺序与「常用类型置顶 + 其余按字母排序」，**Common types shown first** 决定置顶行数。宿主表单的选择项只有下拉框，单选列表样式无法实现，因此 16 只完成排序与数量部分。
+- **Skip CI 预设与默认值**（18）：**Skip CI markers** 表格定义可选标记，**Default Skip CI marker** 选默认标记，**Skip CI checked by default** 决定表单默认是否勾选；未勾选时分类字段不写入消息。
+- **草稿恢复**（5）：表单按项目（窗口仓库根路径）把已填内容存进插件存储，中途关闭工具窗后下次打开仍在，且不会串到别的项目；写入提交面板或清空表单后丢弃。
+- **每个动作独立显隐**（6）：Commit 页 **Buttons** 组控制四个按钮；插件在启动（`activation = ["on-startup-finished"]`）与 `settings-changed` 事件时把四个选择写成 `plugin.<id>.<key>` context key，`plugin.toml` 的提交菜单 `when` 读取这些键；隐藏按钮后命令和快捷键仍可用。
+- **每个动作独立图标**（7）：`generate` 和 `manual` 分别使用 `icons/generate.svg` 与 `icons/manual.svg`，四个动作分别使用不同图标。
+- **自定义提交语言**（29）：`language` 从三值枚举改为自由文本，任意语言名称原样进入 prompt；`Chinese`/`English` 仍作为长名称的快捷值，`auto` 按界面语言解析（新增日文、韩文）。
+- **字段规范化**（34）：解析后统一小写标识符、去掉标题尾标点、去掉 `closes` 的 `Closes` 前缀并去重、去掉 `changes` 的 `BREAKING CHANGE:` 前缀。含控制字符的标识符仍按原规则拒绝，不做静默修复。
+- **单行多句正文转列表**（35）：单行正文按句号、分号、感叹号、问号切分为多条 bullet；ASCII 句点只在后面开始新句时切分，`1.5`、`e.g.` 保持原样；单句正文保持纯文本。
+- **生成质量检查**（32）：本地检查空泛标题、仅文件名的标题和不足十二列（CJK 按两列计）的标题，命中只在通知里列出，不改写结果、不追加请求。参考项目的「少于 12 个字符」规则会误判常见短中文标题，故改为列宽判据。
+- **兼容结果缓存**（39）：被 4xx 拒绝的参数（token 字段、temperature）按端点、模型、协议、思考映射和温度配置记入插件存储，下次直接按已接受的请求形状发送；请求诊断新增 `cached:` 一栏（40 由此收口为完成）。
+- **日文与韩文**（47）：新增 `locales/ja.json`、`locales/ko.json`，覆盖命令、视图、设置页与属性标题；`ui.rs` 的通知与对话框文案扩到四份（中、英、日、韩）。设置项的说明文字仍为英文，宿主对没有词条的文本回退原文。
+- `cargo test` 从 96 个增加到 127 个，新增覆盖规范化与断句、质量检查、语言解析、编辑器渲染/写回/显隐/排序/Skip CI、按项目草稿、动作显隐与事件、缓存命中与分片、四语言文案。
+
+第三批验收修复：选择框与复选框变更后刷新，手动写回先校验标题并保留非法输入草稿；正文保留命令行参数、负数和指针前缀；修改温度后重新发送新值；四语编辑提示明确会替换已有提交信息；第 47 项状态改为部分完成。新增 5 项测试，其中 4 项先复现缺陷后通过。
+
+验收修复（0.7.1 之后的修复，随本版发布）：
+
+- 预算型思考连接测试使用活动档案的响应上限，使 `thinking.budget_tokens` 落在实际请求上限之内；其他探针仍用 16 token。
+- 空模板或只有空白的渲染结果判为模板错误，回退内置 Default 并报告原因，不丢失已生成的提交信息。
+- 思考占位符按 JSON 路径片段校验，字面点号键无法伪装成嵌套的 budget 字段。
+- 配套的 OpenIDEA 0.1.40 宿主补丁在严格校验前恢复旧设置，并为设置表格增加 Duplicate 动作；提交类型 schema 通过 `legacyStringKey` 显式声明字符串列表迁移。
+
+边界：16 的「单选列表 / 混合样式」需要宿主提供除了下拉之外的控件，暂记为部分完成；47 只翻译标题类文案，设置项说明仍为英文。清单 4（Smart Echo）、31/33（JSON 修复、质量纠正）与 38（思考参数兼容重试）不在本轮。
+
+宿主真实 React 控件和当前 manifest 的 2 项隔离检查通过，覆盖选择框显示、复选框勾选/取消，以及隐藏按钮后 Find Action 和快捷键可用性。完整桌面流程、日韩设置文案展示与真实服务端点仍待实测。
 
 ## 0.7.1
 

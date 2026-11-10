@@ -12,6 +12,7 @@
 use crate::config::{Config, Protocol};
 use crate::thinking;
 use openidea_plugin::{Error, HttpRequest, host};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::Instant;
 
@@ -113,6 +114,13 @@ pub enum TokenParameter {
 }
 
 impl TokenParameter {
+    /// The field a cached refusal names.
+    fn named(name: &str) -> Option<Self> {
+        [Self::Tokens, Self::CompletionTokens, Self::OutputTokens]
+            .into_iter()
+            .find(|token| token.name() == name)
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Self::Tokens => "max_tokens",
@@ -190,6 +198,9 @@ pub struct Diagnostics {
     pub attempts: u32,
     /// Parameters a refusal made the plugin drop, in order.
     pub adjusted: Vec<&'static str>,
+    /// Parameters a refusal of an earlier request had already dropped, applied
+    /// from the compatibility cache without asking the server again.
+    pub cached: Vec<&'static str>,
     /// The thinking fragment sent, or why it was omitted. `None` when the
     /// profile sends no thinking parameters at all.
     pub thinking: Option<String>,
@@ -215,6 +226,10 @@ impl Diagnostics {
         if !self.adjusted.is_empty() {
             line.push_str(" · adjusted: ");
             line.push_str(&self.adjusted.join(", "));
+        }
+        if !self.cached.is_empty() {
+            line.push_str(" · cached: ");
+            line.push_str(&self.cached.join(", "));
         }
         if let Some(thinking) = &self.thinking {
             line.push_str(&format!(" · thinking: {thinking}"));
@@ -329,12 +344,94 @@ fn clip(text: &str, max: usize) -> String {
     }
 }
 
+/// What a server refused for one endpoint, model, protocol and thinking
+/// mapping (checklist 39). Stored with `host::storage`, so it survives the idle
+/// reclaim that drops the Wasm instance.
+#[derive(Default, Serialize, Deserialize)]
+struct Cached {
+    /// The token field the server accepted, when it is not the default one.
+    token: Option<String>,
+    /// The server refused `temperature` for this model.
+    temperature_off: bool,
+}
+
+fn protocol_key(protocol: Protocol) -> &'static str {
+    match protocol {
+        Protocol::OpenAiChat => "openai-chat",
+        Protocol::OpenAiResponses => "openai-responses",
+        Protocol::Anthropic => "anthropic",
+    }
+}
+
+fn fnv1a(text: &str) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in text.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+/// A temperature-value refusal applies only to that configured value.
+fn cache_key(config: &Config) -> String {
+    let identity = format!(
+        "{}|{}|{}|{}|{:?}",
+        config.effective_base_url(),
+        config.effective_model(),
+        protocol_key(config.protocol),
+        thinking::mapping_text(&config.thinking, config.protocol),
+        config.send_temperature.then_some(config.temperature)
+    );
+    format!("compat:{:016x}", fnv1a(&identity))
+}
+
+/// The shape to start with, from what an earlier request learned.
+fn cached_shape(config: &Config, default: RequestShape) -> (RequestShape, Vec<&'static str>) {
+    let Some(cached) = host::storage::get(&cache_key(config))
+        .ok()
+        .flatten()
+        .and_then(|text| serde_json::from_str::<Cached>(&text).ok())
+    else {
+        return (default, Vec::new());
+    };
+    let mut shape = default;
+    let mut notes: Vec<&'static str> = Vec::new();
+    if let Some(token) = cached.token.as_deref().and_then(TokenParameter::named)
+        && token != default.token
+    {
+        shape.token = token;
+        notes.push("token parameter");
+    }
+    if cached.temperature_off && default.temperature.is_some() {
+        shape.temperature = None;
+        notes.push("temperature");
+    }
+    (shape, notes)
+}
+
+/// Remembers what this request had to drop, so the next one starts there.
+fn remember_shape(config: &Config, default: RequestShape, shape: RequestShape) {
+    let changed = shape.token != default.token
+        || (default.temperature.is_some() && shape.temperature.is_none());
+    if !changed {
+        return;
+    }
+    let cached = Cached {
+        token: (shape.token != default.token).then(|| shape.token.name().to_owned()),
+        temperature_off: default.temperature.is_some() && shape.temperature.is_none(),
+    };
+    if let Ok(text) = serde_json::to_string(&cached) {
+        let _ = host::storage::set(&cache_key(config), &text);
+    }
+}
+
 /// Posts one prompt, retrying with adjusted parameters when the server refuses
 /// one the plugin chose. The attempts share [`BUDGET_MS`].
 fn send(config: &Config, system: &str, user: &str, max_tokens: u32) -> Result<Answer, Error> {
     let url = endpoint(config)?;
     let started = Instant::now();
-    let mut shape = RequestShape::for_config(config);
+    let default_shape = RequestShape::for_config(config);
+    let (mut shape, cached) = cached_shape(config, default_shape);
     let resolution = thinking::resolve(&config.thinking, config.protocol, max_tokens);
     let mut adjusted: Vec<&'static str> = Vec::new();
     let mut attempts = 0;
@@ -361,6 +458,7 @@ fn send(config: &Config, system: &str, user: &str, max_tokens: u32) -> Result<An
         let response = host::fetch(&request)?;
         let text = response.text();
         if (200..300).contains(&response.status) {
+            remember_shape(config, default_shape, shape);
             return Ok(Answer {
                 text,
                 status: response.status,
@@ -371,6 +469,7 @@ fn send(config: &Config, system: &str, user: &str, max_tokens: u32) -> Result<An
                     temperature: shape.temperature,
                     attempts,
                     adjusted,
+                    cached,
                     thinking: resolution.note.clone(),
                 },
             });
@@ -557,7 +656,7 @@ pub fn extract_content(protocol: Protocol, body: &str) -> Result<String, Error> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{CommitType, MessageLanguage, Provider};
+    use crate::config::{CommitType, Provider};
     use openidea_plugin::HttpResponse;
     use openidea_plugin::mock::MockHost;
 
@@ -570,7 +669,7 @@ mod tests {
             temperature: 0.5,
             send_temperature: true,
             max_tokens: 4096,
-            language: MessageLanguage::Auto,
+            language: "English".into(),
             max_diff_chars: 12_000,
             commit_types: vec![CommitType {
                 title: "feat".into(),
@@ -580,6 +679,19 @@ mod tests {
             secret_slot: "api-key".into(),
             template: None,
             thinking: thinking::Settings::default(),
+            editor: crate::config::EditorSettings {
+                show_type: true,
+                show_scope: true,
+                show_body: true,
+                show_changes: true,
+                show_closes: true,
+                show_skip_ci: true,
+                type_style: crate::config::TypeStyle::Table,
+                common_types: 3,
+                skip_ci_presets: Vec::new(),
+                skip_ci_default: String::new(),
+                skip_ci_checked: false,
+            },
         }
     }
 
@@ -776,6 +888,7 @@ mod tests {
             temperature: None,
             attempts: 2,
             adjusted: vec!["token parameter"],
+            cached: Vec::new(),
             thinking: None,
         };
         assert_eq!(
@@ -794,6 +907,7 @@ max_completion_tokens 64000 · temperature omitted · 2 attempts · adjusted: to
             temperature: Some(0.5),
             attempts: 1,
             adjusted: Vec::new(),
+            cached: Vec::new(),
             thinking: None,
         };
         diagnostics.thinking = Some("HIGH → {\"reasoning_effort\":\"high\"}".into());
@@ -822,6 +936,90 @@ max_completion_tokens 64000 · temperature omitted · 2 attempts · adjusted: to
         assert_eq!(body["reasoning_effort"], "high");
         assert_eq!(body["model"], "gpt-4o-mini");
         assert_eq!(body["max_tokens"], 4096);
+    }
+
+    fn refusing_temperature_host() -> MockHost {
+        let host =
+            MockHost::install().with_capabilities(&["secrets", "storage", "net:api.deepseek.com"]);
+        host.set_secret("api-key", "test-key");
+        host.on_fetch(|request| {
+            let body = String::from_utf8_lossy(request.body.as_deref().unwrap_or_default());
+            if body.contains("\"temperature\"") {
+                return Ok(HttpResponse {
+                    status: 400,
+                    headers: Vec::new(),
+                    body: br#"{"error":{"message":"Unsupported value: 'temperature' does not support 0.5 with this model."}}"#.to_vec(),
+                });
+            }
+            Ok(HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: br#"{"choices":[{"message":{"content":"ok"}}]}"#.to_vec(),
+            })
+        });
+        host
+    }
+
+    #[test]
+    fn a_refused_temperature_is_not_asked_again() {
+        let host = refusing_temperature_host();
+        let config = config(Provider::DeepSeek, Protocol::OpenAiChat, "");
+
+        let first = send(&config, "system", "user", 4096).expect("the retry answers");
+        assert_eq!(first.diagnostics.attempts, 2);
+        assert_eq!(first.diagnostics.adjusted, vec!["temperature"]);
+        assert!(first.diagnostics.cached.is_empty());
+        assert_eq!(host.requests().len(), 2);
+
+        let second = send(&config, "system", "user", 4096).expect("the cache answers");
+        assert_eq!(
+            second.diagnostics.attempts, 1,
+            "the refusal is remembered, not asked again"
+        );
+        assert_eq!(second.diagnostics.cached, vec!["temperature"]);
+        assert!(
+            second.diagnostics.summary().contains("cached: temperature"),
+            "{}",
+            second.diagnostics.summary()
+        );
+        assert_eq!(
+            host.requests().len(),
+            3,
+            "one request, not two: {:?}",
+            host.requests()
+        );
+        let last = host.requests().last().cloned().expect("a request was made");
+        assert!(
+            !String::from_utf8_lossy(last.body.as_deref().unwrap_or_default())
+                .contains("\"temperature\""),
+            "the cached shape leaves temperature out"
+        );
+    }
+
+    #[test]
+    fn the_cache_is_per_endpoint_and_model() {
+        let host = refusing_temperature_host();
+        let config = config(Provider::DeepSeek, Protocol::OpenAiChat, "");
+        send(&config, "system", "user", 4096).expect("the retry answers");
+        assert_eq!(host.requests().len(), 2);
+
+        let mut other_model = config.clone();
+        other_model.model = "another-model".into();
+        send(&other_model, "system", "user", 4096).expect("the retry answers");
+        assert_eq!(
+            host.requests().len(),
+            4,
+            "another model starts from the configured shape"
+        );
+
+        let mut other_endpoint = config.clone();
+        other_endpoint.base_url = "https://api.deepseek.com/other".into();
+        send(&other_endpoint, "system", "user", 4096).expect("the retry answers");
+        assert_eq!(
+            host.requests().len(),
+            6,
+            "another endpoint is another entry"
+        );
     }
 
     #[test]
@@ -894,5 +1092,28 @@ max_completion_tokens 64000 · temperature omitted · 2 attempts · adjusted: to
 
         let error = models(&config(Provider::DeepSeek, Protocol::OpenAiChat, "")).unwrap_err();
         assert!(format!("{error}").contains("bad key"), "{error:?}");
+    }
+    #[test]
+    fn changing_temperature_retries_the_configured_value() {
+        let host =
+            MockHost::install().with_capabilities(&["storage", "secrets", "net:api.deepseek.com"]);
+        host.set_secret("api-key", "test");
+        host.on_fetch(|request| {
+            let body: Value = serde_json::from_slice(request.body.as_deref().unwrap()).unwrap();
+            if body.get("temperature") == Some(&json!(0.5)) {
+                return Ok(HttpResponse { status: 400, headers: vec![], body: br#"{"error":{"message":"Unsupported value: temperature must be between 0 and 0.3"}}"#.to_vec() });
+            }
+            Ok(HttpResponse {status: 200, headers: vec![], body: br#"{"choices":[{"message":{"content":"ok"}}]}"#.to_vec()})
+        });
+        let mut config = config(Provider::DeepSeek, Protocol::OpenAiChat, "");
+        send(&config, "s", "u", 4096).unwrap();
+        config.temperature = 0.2;
+        let answer = send(&config, "s", "u", 4096).unwrap();
+        assert_eq!(answer.diagnostics.temperature, Some(0.2));
+        assert!(answer.diagnostics.cached.is_empty());
+        assert_eq!(host.requests().len(), 3);
+        let last = host.requests().last().unwrap().clone();
+        let body: Value = serde_json::from_slice(last.body.as_deref().unwrap()).unwrap();
+        assert_eq!(body["temperature"], 0.2);
     }
 }

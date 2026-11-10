@@ -6,8 +6,9 @@
 
 ## 功能
 
-- 在 Commit 工具窗和 Commit 对话框的提交信息工具栏中增加三个按钮（`commit.message`）：**Generate Commit Message**、**Generate Commit Message with Requirements**、**Format Commit Message**。
+- 在 Commit 工具窗和 Commit 对话框的提交信息工具栏中增加四个按钮（`commit.message`）：**Generate Commit Message**、**Generate Commit Message with Requirements**、**Format Commit Message**、**Edit Commit Message Fields**（打开手动编辑器工具窗）。每个按钮都可以在设置里单独隐藏。
 - **With Requirements** 弹出多行输入框，填写本次的业务背景、Bug 说明、issue 引用或 Skip CI 要求，只对这一次生成生效。**Format Commit Message** 把提交框里已有的草稿重写成规范字段，保留原有事实、issue 号和语言。
+- 手动编辑器：同一批字段的工具窗表单（`type`、`scope`、`subject`、`body`、`changes`、`closes` 与 Skip CI 标记）。点写入时用你的模板在本地渲染（不调用模型），并按同一套版本号校验写进提交框。表单按项目保留已填内容，中途关闭不会丢。
 - 通过 `host::pending_commit()` 读取本次提交实际包含的文件和代码块（包括部分 hunk 选择）；读取前会像 Commit 一样保存相关文件的未保存编辑器。
 - 把这些文件的状态和实际包含的 diff（按 hunk 裁剪并受字符预算限制）发送给 LLM，另附 `Project::vcs_log()` 取到的最近五条提交标题作为风格参考。历史只作风格提示：不使用工作区的 `vcs_diff()`，生成内容仍以所选变更为准。
 - 模型返回结构化字段（`type`、`scope`、`subject`、`body`、`changes`、`closes`、`skipCi`）；插件在本地渲染成最终提交信息，保证格式一致。
@@ -17,7 +18,8 @@
 - 点击后能看出正在执行：提交信息框为空时会先写入「正在生成提交信息…」，生成完再替换成结果（你已经输入过内容的框不会被动），状态栏也有进度任务。
 - 通过 `host::set_commit_message()` 把生成结果写回原生提交信息框。如果生成期间你修改了提交信息或勾选内容，版本号校验会拒绝写入，当前文本不会被覆盖。
 - 模型明确拒绝 `max_tokens`（要求改用 `max_completion_tokens`）或 `temperature` 时，只去掉该参数再重试一次；所有尝试共享 50 秒预算，处于宿主 60 秒后台任务窗口内。**Send temperature** 设置也可以一开始就省略温度。
-- 成功通知与 **Test** 结果都会列出实际发送的请求地址、token 字段、温度、尝试次数和兼容调整。
+- 成功通知与 **Test** 结果都会列出实际发送的请求地址、token 字段、温度、尝试次数、兼容调整，以及是否命中兼容缓存。
+- 生成后会在本地检查标题（空泛、仅是文件名、不足十二列），命中只在通知里列出，不改写结果。
 - 在提交面板里检查后直接提交。命令也可以在 **Find Action** 和快捷键（`⌥⌘G` / `Ctrl+Alt+G`）中使用。
 
 ## 环境要求
@@ -56,7 +58,7 @@ openidea-plugin pack . --out dist/qszfy666.commit-message-helper-0.7.1.oiplugin 
 
 | 页面 | 设置 |
 | --- | --- |
-| Commit | 提交信息语言（`auto` 跟随 IDE 界面语言，或指定中文/英文）、diff 字符上限、允许的提交类型（「标题＋描述」表格，描述会写进 prompt）。 |
+| Commit | 提交信息语言（可填任意语言名称，`auto` 跟随 IDE 界面语言）、diff 字符上限、允许的提交类型（「标题＋描述」表格，描述会写进 prompt）、编辑器的字段显隐与类型排序、Skip CI 标记，以及提交面板显示哪几个按钮。 |
 | Prompts | 额外的系统提示词、提示词档案表格与 **Default prompt profile**。 |
 | Commit Templates | 输出模板档案表格、**Default template**，以及三个动作：**Preview**（用所选示例字段渲染编辑中的模板）、**Variables**（变量说明、示例与错误）、**Restore Default**（复制内置模板）。 |
 | LLM Settings | Provider 预设、API 协议、Base URL、Model、Temperature、**Send temperature**、Max response tokens、Thinking 组（等级、预设、自定义映射）、模型档案表格与 **Active model profile**；以及五个页面动作：**Test**、**Models**、**Request URL**、**Thinking Levels**（映射实际提供的等级）、**Thinking Help**（映射规则与预设模板）。五个动作都会先应用待保存设置。 |
@@ -109,6 +111,22 @@ LLM Settings 的 Thinking 组（模型档案表格也有同三列）包含 **Thi
 
 Magpie 示例：Provider 选 **Magpie**，Base URL 填 `http://127.0.0.1:3425`，Model 填 Magpie 里对应的模型名。IDE 只允许对 loopback 使用明文 HTTP。
 
+### 手动编辑器
+
+**Commit Message Editor** 工具窗（提交信息上方的 **Edit Commit Message Fields** 按钮也会打开它）是七个提交字段的表单：type、scope、subject、body、breaking change、closes 和 Skip CI 标记。点 **Write to commit message** 会用当前模板在本地渲染（不调用模型），替换当前提交信息。写入前会校验标题，非法字段会保留原提交信息和表单草稿；读取提交草稿后的新修改由 `revision` 校验保护。下拉框与复选框变更后同步显示。
+
+**Commit** 设置页决定这个表单长什么样：每个字段可以隐藏（subject 始终显示）；**Type option order** 可选保持设置表格顺序，或把前 **Common types shown first** 行常用类型置顶；**Skip CI markers** 是标记表格，配合 **Default Skip CI marker** 与 **Skip CI checked by default**。宿主表单对选择项只提供下拉框，因此没有单选列表样式。
+
+表单按项目把已填内容留在插件自己的存储里：编辑到一半关掉工具窗，下次打开还在，且只在同一项目里；写入提交面板或清空表单后即丢弃草稿。
+
+### 按钮与界面语言
+
+Commit 页的 **Buttons** 组决定提交信息上方四个按钮的显隐：生成、带附加要求生成、格式化和手动编辑。隐藏的按钮会从工具栏移除（命令仍可从 Find Action 运行）。插件在启动时和设置变化时把四个选择写成 context key。
+
+提交信息语言可以填任意语言名称，例如 `English`、`Simplified Chinese`、`Japanese`、`한국어` 或 `繁體中文`；`auto` 或留空跟随 IDE 界面语言。插件自己的文案（通知、对话框、编辑器字段标签）也跟随该语言：内置英文、简体中文、日文和韩文，其他语言回退英文。
+
+生成结果写回前还会做一次本地质量检查（空泛标题、标题只是文件名、标题不足十二列），命中只在通知里列出，不改写内容；自动纠正请求属于另一条目。
+
 ### 为什么需要这些能力
 
 | 能力 | 用途 |
@@ -116,6 +134,8 @@ Magpie 示例：Provider 选 **Magpie**，Base URL 填 `http://127.0.0.1:3425`�
 | `vcs.read` | 读取正在准备的提交（勾选的文件及其 diff）、仓库根/分支，以及最近五条提交标题作为风格参考；不读其他内容。 |
 | `vcs.write` | 把生成结果写进提交信息框（`set_commit_message`）。插件不提交、不暂存、不 fetch、不 push。 |
 | `secrets` | API Key 存在系统钥匙串，由 IDE 在发请求时填入；插件代码读不到值。 |
+| `storage` | 按项目保存手动编辑器的草稿，并记住某个端点拒绝过的请求参数，下次不再重复询问。卸载插件时一并删除。 |
+| `events` | 订阅 `settings-changed`，让按钮显隐立刻生效；不订阅其他事件。 |
 | `net:<host>`（可选） | 把 prompt、模型列表请求和连接测试发给你配置的 LLM 端点。每个预设服务商一个可选主机，只授你实际用的那个；`127.0.0.1`/`localhost` 给本地服务（Magpie、Ollama）。 |
 | `clipboard`（可选） | 复制 **Models** 中选中的模型 id、**Restore Default** 的内置模板和 **Thinking Help** 的预设映射。未授权时会在通知里显示文本。 |
 
@@ -129,7 +149,7 @@ Magpie 示例：Provider 选 **Magpie**，Base URL 填 `http://127.0.0.1:3425`�
 
 Base URL 补全规则：无路径的 URL 补 `/v1`；已有路径的直接追加协议后缀（`/chat/completions`、`/responses`、`/messages`）；已带后缀的原样使用。
 
-Chat Completions 发送 `max_tokens`，Responses 发送 `max_output_tokens`，Anthropic 发送 `max_tokens`。模型返回 4xx 明确拒绝 `max_tokens`（要求改用 `max_completion_tokens`）或拒绝 `temperature` 时，插件只去掉该参数重试；其他失败（密钥错误、服务端错误）直接报告，不重试。最多三次尝试，共享 50 秒预算。校验后的思考片段会合并进同一个请求体；服务端明确拒绝思考字段时直接报告，不重试。
+Chat Completions 发送 `max_tokens`，Responses 发送 `max_output_tokens`，Anthropic 发送 `max_tokens`。模型返回 4xx 明确拒绝 `max_tokens`（要求改用 `max_completion_tokens`）或拒绝 `temperature` 时，插件只去掉该参数重试；其他失败（密钥错误、服务端错误）直接报告，不重试。最多三次尝试，共享 50 秒预算。被拒绝的参数按端点、模型、协议、思考映射和温度配置记录在插件存储里，下次直接按已接受的请求形状发送，不再重复试探；修改温度后会重新发送新值，请求诊断会写明命中的缓存。校验后的思考片段会合并进同一个请求体；服务端明确拒绝思考字段时直接报告，不重试。
 
 ## 隐私
 

@@ -1,21 +1,24 @@
 id = "qszfy666.commit-message-helper"
 name = "Git Commit Message Helper"
-version = "0.7.1"
+version = "0.8.0"
 description = "Generate a Conventional Commits message for the changes selected in OpenIDEA's native Commit panel, with an LLM."
 authors = ["qszfy666"]
 license = "Apache-2.0"
 icon = "icons/icon.svg"
 icon-dark = "icons/icon_dark.svg"
-change-notes = "0.7.1 — finishes the second migration batch: per-model thinking levels and request mappings with validation and budget checks, a live commit-template preview, template variable help and a restore entry. Existing settings keep sending no thinking parameters. Needs OpenIDEA 0.1.40 (plugin API 1.4)."
+change-notes = "0.8.0 — manual structured editor tool window and per-action button visibility; free-text commit language, field normalization, sentence bullets and a local quality check; per-project editor drafts; the compatibility cache now remembers what an endpoint refused; Japanese and Korean text. Needs OpenIDEA 0.1.40 (plugin API 1.4); new capabilities: storage, events."
 categories = ["vcs", "ai"]
 engines.openidea = "^1.4"
 wasm = "dist/plugin.wasm"
+# Sets the four button context keys at start-up, so a hidden button is
+# hidden from the first frame instead of after the first command.
+activation = ["on-startup-finished"]
 
 [capabilities]
 # The commit workflow: pending_commit reads the included changes and
 # set_commit_message writes the draft message; the API key is a plugin secret
 # and is filled in by the IDE when host::fetch sends a request.
-required = ["vcs.read", "vcs.write", "secrets"]
+required = ["vcs.read", "vcs.write", "secrets", "storage", "events"]
 # Grant only the endpoints you use. `127.0.0.1` covers Magpie and local
 # OpenAI-compatible servers; `localhost` covers Ollama-on-localhost.
 # `clipboard` is optional: the model list copies the chosen id so it can be
@@ -45,6 +48,7 @@ id = "generate"
 title = "Generate Commit Message"
 category = "Git Commit Message Helper"
 when = "vcsAvailable"
+icon = "icons/generate.svg"
 
 [[contributes.commands]]
 id = "generate-with-context"
@@ -59,6 +63,15 @@ title = "Format Commit Message"
 category = "Git Commit Message Helper"
 when = "vcsAvailable"
 icon = "icons/format.svg"
+
+# Brings the manual structured editor (the view below) to the front: the
+# fourth button of the Commit panel.
+[[contributes.commands]]
+id = "manual"
+title = "Edit Commit Message Fields"
+category = "Git Commit Message Helper"
+icon = "icons/manual.svg"
+when = "vcsAvailable"
 
 [[contributes.commands]]
 id = "models"
@@ -105,19 +118,35 @@ category = "Git Commit Message Helper"
 [[contributes.menus]]
 menu = "commit.message"
 command = "generate"
+when = "vcsAvailable && plugin.qszfy666.commit-message-helper.actionGenerate"
 
 [[contributes.menus]]
 menu = "commit.message"
 command = "generate-with-context"
+when = "vcsAvailable && plugin.qszfy666.commit-message-helper.actionGenerateWithContext"
 
 [[contributes.menus]]
 menu = "commit.message"
 command = "format"
+when = "vcsAvailable && plugin.qszfy666.commit-message-helper.actionFormat"
+
+[[contributes.menus]]
+menu = "commit.message"
+command = "manual"
+when = "vcsAvailable && plugin.qszfy666.commit-message-helper.actionManual"
 
 # Keep a Tools-menu entry for discoverability and for running it with a keymap.
 [[contributes.menus]]
 menu = "tools"
 command = "generate"
+
+# The manual structured editor (checklist 3): a form of the seven commit
+# fields. Applying renders them locally and writes into the Commit panel.
+[[contributes.views]]
+id = "commit-editor"
+title = "Commit Message Editor"
+icon = "icons/generate.svg"
+location = "right"
 
 [[contributes.keymaps]]
 command = "generate"

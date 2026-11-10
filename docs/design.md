@@ -9,7 +9,7 @@ OpenIDEA 0.1.40（`openidea:plugin@1.4.0`）已经提供原生提交工作流：
 - `host::set_commit_message(revision, text)`：把生成结果写入原生提交信息框，并按 `revision` 防止覆盖用户后来输入的内容；
 - `Project::vcs_log()`、`ui.input-multiline`、`ui.pick` 与 `clipboard`：最近提交风格参考、附加要求输入、模型列表选择和复制。
 
-因此插件不再需要自己的 Tool Window、文件勾选清单、剪贴板复制，也不再需要 `process:git`。插件从「工具窗 + 复制粘贴」改为「原生提交面板按钮 + 一键填入」；工具栏上的三个按钮分别对应生成、带附加要求生成与草稿格式化。
+因此插件不再需要自己的 Tool Window、文件勾选清单、剪贴板复制，也不再需要 `process:git`。插件从「工具窗 + 复制粘贴」改为「原生提交面板按钮 + 一键填入」；工具栏上的四个按钮分别对应生成、带附加要求生成、草稿格式化和手动编辑（打开结构化编辑器视图）；按钮各自可隐藏。
 
 ## 2. 架构
 
@@ -29,12 +29,20 @@ OpenIDEA Commit 工具窗 / Commit 对话框
               ├─ prompt.rs   三种任务的 prompt + JSON 字段契约 + 模板渲染（内置 Default 与命名模板）
               ├─ thinking.rs 思考等级、预设映射、校验、等级收敛与 token budget
               ├─ llm.rs      host::fetch → 三种协议、模型列表、兼容重试、请求诊断、密钥槽
-              ├─ config.rs   设置、服务商预设、命名档案解析与项目层选择
-              ├─ ui.rs       中英文通知与对话框文案
-              └─ lib.rs      命令入口：generate / generate-with-context / format / models / endpoint /
-                           test / template-preview / template-help / template-default /
-                           thinking-levels / thinking-help
+              ├─ config.rs   设置、服务商预设、命名档案解析、项目层选择、编辑器与按钮设置
+              ├─ editor.rs   手动结构化编辑器（视图）：七个字段的表单、本地渲染写回、按项目草稿
+              ├─ ui.rs       中英日韩四份通知与对话框文案（宿主文案目录只覆盖声明式文本）
+              └─ lib.rs      命令入口：generate / generate-with-context / format / manual / models /
+                           endpoint / test / template-preview / template-help / template-default /
+                           thinking-levels / thinking-help；以及 views 导出、动作显隐的 context key
 ```
+
+两条并行的入口：
+
+- **生成路径**：提交面板按钮 → prompt → `host::fetch` → 解析 → 本地渲染 → `set_commit_message`。
+- **手动路径**（清单 3）：`[[contributes.views]]` 工具窗表单 → 字段事件写入插件状态 → `Write to commit message` → 本地渲染 → `set_commit_message`，与生成共用同一 `revision` 保护。
+
+插件状态只有两处持久化，都用 `host::storage`（`storage` 能力，64 MiB 上限，卸载时删除）：按项目保存的编辑器草稿（键 `editor:<项目根>`）和按端点/模型/协议/思考映射/温度配置保存的兼容结果缓存（键 `compat:<hash>`）。宿主会在空闲 5 分钟后回收 WASM 实例，因此这两份状态不能只放在内存里。
 
 ## 3. 数据采集
 
@@ -137,15 +145,20 @@ Commit Templates 页的 **Preview** 用 `pick_many` 选择哪些示例字段有�
 ## 6. 交互流程
 
 1. 用户打开 Commit 工具窗或 Commit 对话框，勾选本次要提交的文件/变更块。
-2. 点击工具栏上的三个按钮之一（或用 Find Action / `⌥⌘G` 调用生成）：
+2. 点击工具栏上的四个按钮之一（或用 Find Action / `⌥⌘G` 调用生成）：
    - **Generate Commit Message**：只用所选变更生成；
    - **Generate Commit Message with Requirements**：先用 `ui.input-multiline` 填写本次的业务背景、Bug 说明、issue 或 Skip CI 要求，取消或留空则不发请求，填写内容只进入这一次的 user prompt；
-   - **Format Commit Message**：把提交框里已有的草稿连同所选 diff 交给模型，要求保留事实并重写为规范字段；草稿为空时直接提示，不发请求。
+   - **Format Commit Message**：把提交框里已有的草稿连同所选 diff 交给模型，要求保留事实并重写为规范字段；草稿为空时直接提示，不发请求；
+   - **Edit Commit Message Fields**：打开手动编辑器视图，不调用模型（见下方手动编辑路径）。
 3. 插件在后台任务中调用 `pending_commit()`，按任务类型构建 prompt 并请求 LLM；同时如果提交信息框为空，先写入「正在生成提交信息…」作为执行中的可见反馈（1.4 仍没有按钮旁的 spinner，也没有输入框占位符 API），失败或取消时清掉，用户中途输入过则不动。
 4. 模型返回后，插件解析并渲染 Conventional Commit 文本，再调用 `set_commit_message(draft.revision, message)`；通知里附上本次请求诊断。
 5. 用户在原生提交框里检查/修改后手动提交；插件不会自动提交。
 
 如果生成期间用户修改了消息或勾选内容，`draft.revision` 已变化，`set_commit_message` 返回 `Error::Stale`，插件只提示「提交面板内容已变化」，不覆盖当前文本。
+
+手动编辑路径（清单 3）：提交信息上方的 **Edit Commit Message Fields** 按钮调用 `host::reveal_view("commit-editor")`，打开工具窗表单（type / scope / subject / body / breaking change / closes / Skip CI）。表单渲染由 `Commit` 设置页决定：六个显隐开关、类型排序（表格顺序或常用置顶）、Skip CI 标记表格与默认值。文本字段变化只更新插件状态并写入 `storage`，保留宿主输入状态；选择框和复选框变更后刷新视图以同步显示；`Write to commit message` 先按生成路径的同一标题约束校验，再读取 `pending_commit()` 的当前 `revision`，替换已有提交信息；读取后若草稿变化则拒绝写入，成功或清空后删除草稿。宿主表单的选择项只渲染下拉框，所以「单选列表 / 混合样式」不可用，类型样式部分只完成排序与数量。
+
+提交信息上方的四个按钮（生成 / 带附加要求生成 / 格式化 / 手动编辑）各自有独立 `when`：`activation = ["on-startup-finished"]` 与 `settings-changed` 事件时，插件把 `Buttons` 设置写成 `plugin.<id>.<action*>` context key，`plugin.toml` 的菜单 `when` 读取同名键，命令自身仅要求仓库可用，因此按钮隐藏后仍可从 Find Action 和快捷键运行。启动即写是为了避免「按钮隐藏后插件永不激活」的死锁。
 
 ## 7. 已知限制
 
@@ -154,13 +167,16 @@ Commit Templates 页的 **Preview** 用 `pick_many` 选择哪些示例字段有�
 3. `pending_commit` / `set_commit_message` 只适用于可信项目，且必须从某个窗口的 command/event 调用。
 4. 多仓库项目会在 `changes` 中返回多个仓库的文件；分支与最近提交来自当前项目对应的仓库状态。
 5. 插件设置是 IDE 声明的多页设置，不支持任意 Web 设置页或条件字段，插件也不能写入设置值：模型列表选择通过剪贴板转交用户；档案管理由声明式表格完成，表格列只支持标量、不支持嵌套集合。四个密钥槽是 manifest 静态声明的上限，档案数量不受此限，但只有四个可独立密钥。模板预览与思考映射等条件界面（清单 11、12、26、27）改用设置页命令动作：预览是「编辑 → 确认 → 看结果」的循环而不是表格内的随改随刷，等级收敛由 **Thinking Levels** 动作显示而不是动态枚举。
-6. 诊断摘要列出 token 字段、温度、尝试次数、兼容调整，以及实际发送或省略的思考参数（24–28 项）；兼容结果缓存命中（39 项）仍未接入，摘要中不含缓存信息。
-7. 思考参数被服务端以 4xx 明确拒绝时直接报告失败，不做移除重试，也不缓存拒绝结果（38、39 项）；首次请求与既有兼容重试仍共享 50 秒预算，重试次数未改变。
+6. 诊断摘要列出 token 字段、温度、尝试次数、兼容调整、缓存命中，以及实际发送或省略的思考参数（24–28、39、40 项）。
+7. 思考参数被服务端以 4xx 明确拒绝时直接报告失败，不做移除重试，也不缓存该拒绝（38 项仍未实现）；缓存只覆盖 token 字段与 temperature。首次请求与既有兼容重试仍共享 50 秒预算，重试次数未改变。
+8. 工具窗表单的控件由宿主决定：`FieldValue` 只有文本、多行、复选框与下拉，因此类型样式没有单选列表；表单在设置变化后不会自动重绘，需要重新打开视图或再次触发动作。
+9. 插件自身的通知与对话框文案按 `host::locale()` 选择（中、英、日、韩），声明式文本走 `locales/*.json` 目录；目录只覆盖标题类文案，设置项说明仍是英文，没有词条的文本由宿主回退原文。
 
 ## 8. 验证
 
-- `cargo test`：93 个单元测试（配置、命名档案与项目默认回退、CommitDraft 上下文、历史标题与受限项目降级、diff 裁剪、三种任务的 prompt、解析/模板渲染与错误回退、模板预览/帮助/恢复、思考等级与预设模板、映射校验与等级收敛、token budget 解析与拒绝、三种协议响应解析、密钥槽、模型列表、兼容重试、请求诊断、生成并写回提交信息）。
+- `cargo test`：127 个单元测试（配置、命名档案与项目默认回退、字段规范化与断句、质量判据、自由文本语言与四语言文案、编辑器渲染/写回/显隐/排序/预设、按项目草稿、动作显隐与事件、兼容缓存命中与分片、CommitDraft 上下文、历史标题与受限项目降级、diff 裁剪、三种任务的 prompt、解析/模板渲染与错误回退、模板预览/帮助/恢复、思考等级与预设模板、映射校验与等级收敛、token budget 解析与拒绝、三种协议响应解析、密钥槽、模型列表、兼容重试、请求诊断、生成并写回提交信息）。
 - `cargo fmt --all --check`、`cargo clippy --all-targets -- -D warnings`。
 - `cargo build --release --target wasm32-wasip2`。
-- `openidea-plugin check .`（用 OpenIDEA 0.1.40 构建的 CLI）：manifest、贡献点、能力、wasm 组件全部通过，组件被识别为插件 API 1.4。
-- 界面与真实端点的行为尚未实测：上述验证覆盖 SDK mock host 下的行为与包结构校验；在 OpenIDEA 0.1.40 + 本地 Magpie 或真实服务端点上的三个按钮、五个新页面动作、字段多选、多行输入框、模型列表选择，以及各思考预设片段是否被端点接受，仍需人工验证。
+- `openidea-plugin check .`（用 OpenIDEA 0.1.40 构建的 CLI）：manifest（含视图、四个按钮的 `when`、`activation`）、贡献点、能力、`locales/*.json` 词条格式与 wasm 组件全部通过，组件被识别为插件 API 1.4。
+- 另以宿主真实 React 控件验证了类型与 Skip CI 下拉显示更新、复选框勾选/取消，并以当前 manifest 核对 Find Action 和快捷键条件，2 项隔离检查通过。
+- 完整桌面界面与真实端点的行为尚未实测：上述验证覆盖 SDK mock host、宿主控件隔离检查与包结构校验；在 OpenIDEA 0.1.40 + 本地 Magpie 或真实服务端点上的四个按钮（含 `when` 生效与图标）、工具窗表单的渲染与字段事件、五个页面动作、字段多选、多行输入框、模型列表选择、日韩文案在设置页的展示，以及各思考预设片段和兼容缓存在真实端点上的表现，仍需人工验证。

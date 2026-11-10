@@ -87,7 +87,7 @@ fn allowed_types(config: &Config) -> String {
 }
 
 pub fn build_prompts(config: &Config, context: &GitContext, task: Task<'_>) -> (String, String) {
-    let language = config.language.prompt_language();
+    let language = config.language.as_str();
     let mut system = SYSTEM_PROMPT.to_owned();
     if !config.extra_prompt.is_empty() {
         system.push_str("\n\nPersistent User Preferences:\n");
@@ -194,9 +194,17 @@ fn text_field(value: &Value, key: &str) -> String {
 /// fences, arrays in `body`, and (as a last resort) a plain Conventional
 /// Commit line.
 pub fn parse_response(text: &str, allowed_types: &[String]) -> Option<CommitFields> {
-    let fields = parse_fields(text)?;
-    if fields.commit_type.is_empty()
-        || !allowed_types.contains(&fields.commit_type)
+    let mut fields = parse_fields(text)?;
+    normalize(&mut fields);
+    valid_header(&fields, allowed_types).then_some(fields)
+}
+
+/// The header constraints shared by generated and manually edited commits.
+pub fn valid_header(fields: &CommitFields, allowed_types: &[String]) -> bool {
+    !(fields.commit_type.is_empty()
+        || !allowed_types
+            .iter()
+            .any(|allowed| allowed.trim().eq_ignore_ascii_case(&fields.commit_type))
         || fields
             .commit_type
             .chars()
@@ -206,11 +214,7 @@ pub fn parse_response(text: &str, allowed_types: &[String]) -> Option<CommitFiel
         || fields
             .scope
             .chars()
-            .any(|c| c.is_control() || matches!(c, '(' | ')'))
-    {
-        return None;
-    }
-    Some(fields)
+            .any(|c| c.is_control() || matches!(c, '(' | ')')))
 }
 
 fn parse_fields(text: &str) -> Option<CommitFields> {
@@ -317,37 +321,248 @@ fn lenient_string_field(text: &str, key: &str) -> Option<String> {
     if !value.is_empty() { Some(value) } else { None }
 }
 
+/// A wide (CJK, fullwidth, Hangul) character takes two columns: the length
+/// rules below count columns, not characters.
+fn is_wide(c: char) -> bool {
+    matches!(c as u32,
+        0x1100..=0x115F
+        | 0x2E80..=0xA4CF
+        | 0xAC00..=0xD7A3
+        | 0xF900..=0xFAFF
+        | 0xFE30..=0xFE4F
+        | 0xFF00..=0xFF60
+        | 0xFFE0..=0xFFE6
+        | 0x20000..=0x2FFFD)
+}
+
+/// Splits a one-line body into its sentences (checklist 35). Full stops,
+/// exclamation and question marks and semicolons end a sentence; an ASCII
+/// period only does when a new sentence starts after it, so `1.5` and `e.g.`
+/// stay inside their sentence. A trailing full-width stop is dropped, an
+/// ASCII period is kept: English bullets keep their sentence period.
+fn split_sentences(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut pieces = Vec::new();
+    let mut start = 0;
+    for (index, &c) in chars.iter().enumerate() {
+        let boundary = match c {
+            '。' | '！' | '？' | '；' | '!' | '?' | ';' => true,
+            '.' => next_sentence_starts(&chars, index + 1),
+            _ => false,
+        };
+        if boundary {
+            push_sentence(&mut pieces, &chars[start..=index]);
+            start = index + 1;
+        }
+    }
+    push_sentence(&mut pieces, &chars[start..]);
+    pieces
+}
+
+fn next_sentence_starts(chars: &[char], mut index: usize) -> bool {
+    if !chars.get(index).is_some_and(|c| c.is_whitespace()) {
+        return false;
+    }
+    while chars.get(index).is_some_and(|c| c.is_whitespace()) {
+        index += 1;
+    }
+    chars
+        .get(index)
+        .is_some_and(|c| c.is_uppercase() || is_wide(*c))
+}
+
+fn push_sentence(pieces: &mut Vec<String>, chars: &[char]) {
+    let text: String = chars.iter().collect();
+    let text = text.trim().trim_end_matches(['。', '．', '；', ';']).trim();
+    if !text.is_empty() {
+        pieces.push(text.to_owned());
+    }
+}
+
+/// One changed behaviour per bullet: lines that are already bullets are kept,
+/// a single line holding several sentences becomes several bullets, and a
+/// one-sentence body stays plain text.
 fn normalize_body(body: &str) -> String {
-    let lines: Vec<&str> = body
+    let lines: Vec<String> = body
         .lines()
-        .map(str::trim_end)
-        .filter(|l| !l.trim().is_empty())
-        .collect();
-    if lines.len() <= 1 {
-        return body.trim().to_owned();
-    }
-    if lines
-        .iter()
-        .all(|line| line.trim_start().starts_with('-') || line.trim_start().starts_with('*'))
-    {
-        return lines
-            .iter()
-            .map(|line| line.trim_start().to_owned())
-            .collect::<Vec<_>>()
-            .join("\n");
-    }
-    lines
-        .iter()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
         .map(|line| {
-            let line = line.trim();
-            if line.starts_with('-') || line.starts_with('*') {
-                line.to_owned()
-            } else {
-                format!("- {line}")
-            }
+            line.strip_prefix(['-', '*', '•'])
+                .filter(|rest| rest.starts_with(char::is_whitespace))
+                .unwrap_or(line)
+                .trim()
+                .to_owned()
         })
+        .collect();
+    let items = if lines.len() > 1 {
+        lines
+    } else {
+        split_sentences(lines.first().map(String::as_str).unwrap_or(""))
+    };
+    if items.len() <= 1 {
+        return items.into_iter().next().unwrap_or_default();
+    }
+    items
+        .iter()
+        .map(|item| format!("- {item}"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Drops a label the model repeats from the field name it fills, such as the
+/// `BREAKING CHANGE:` prefix the template adds itself (checklist 34).
+fn strip_label(value: &str, labels: &[&str]) -> String {
+    let text = value.trim();
+    let lower = text.to_ascii_lowercase();
+    for label in labels {
+        if lower.starts_with(label) {
+            return text[label.len()..].trim().to_owned();
+        }
+    }
+    text.to_owned()
+}
+
+/// The subject is one line without trailing punctuation; the identifiers are
+/// lowercase. A line break is left in place so the validation below still
+/// rejects it: the commit header is a single line.
+fn normalize_subject(subject: &str) -> String {
+    let mut text = subject
+        .trim()
+        .split([' ', '\t'])
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    while let Some(last) = text.chars().last() {
+        if matches!(
+            last,
+            '。' | '．'
+                | '.'
+                | ','
+                | '，'
+                | '、'
+                | ';'
+                | '；'
+                | ':'
+                | '：'
+                | '!'
+                | '！'
+                | '?'
+                | '？'
+        ) {
+            text.pop();
+        } else {
+            break;
+        }
+    }
+    text.trim_end().to_owned()
+}
+
+/// A type or scope: lowercase and trimmed. Nothing else is repaired: the
+/// validation below rejects a stray bracket or control character rather than
+/// quietly rewriting a broken header.
+fn normalize_identifier(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+/// One reference per issue, without the `Closes` prefix the template adds.
+fn normalize_closes(closes: &str) -> String {
+    let text = strip_label(
+        closes,
+        &[
+            "closes:",
+            "closes ",
+            "fixes:",
+            "fixes ",
+            "resolves:",
+            "resolves ",
+            "refs:",
+            "refs ",
+        ],
+    );
+    let mut seen: Vec<&str> = Vec::new();
+    for token in text.split(|c: char| c == ',' || c.is_whitespace()) {
+        let token = token.trim();
+        if !token.is_empty() && !seen.contains(&token) {
+            seen.push(token);
+        }
+    }
+    seen.join(", ")
+}
+
+/// Cleans the fields models get wrong before validation (checklist 34).
+pub fn normalize(fields: &mut CommitFields) {
+    fields.commit_type = normalize_identifier(&fields.commit_type);
+    fields.scope = normalize_identifier(&fields.scope);
+    fields.subject = normalize_subject(&fields.subject);
+    fields.body = normalize_body(&fields.body);
+    fields.changes = strip_label(
+        &fields.changes,
+        &["breaking change:", "breaking-change:", "breaking changes:"],
+    );
+    fields.closes = normalize_closes(&fields.closes);
+    fields.skip_ci = fields.skip_ci.trim().to_owned();
+}
+
+/// A finding of the local quality check (checklist 32). It is reported, never
+/// used to rewrite the message.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QualityIssue {
+    /// The subject only restates the act: "update files", "修改代码".
+    VagueSubject,
+    /// The subject is a changed file's name and nothing more.
+    FileNameOnly,
+    /// The subject is shorter than [`MIN_SUBJECT_WIDTH`] columns.
+    TooShortSubject,
+}
+
+/// Short subjects are not specific: twelve columns is about six CJK characters
+/// or twelve Latin ones. The reference plugin's twelve *characters* rule flags
+/// ordinary short Chinese subjects.
+pub const MIN_SUBJECT_WIDTH: usize = 12;
+
+const VAGUE_SUBJECTS: [&str; 14] = [
+    "update files",
+    "update code",
+    "modify code",
+    "change logic",
+    "adjust configuration",
+    "misc changes",
+    "minor changes",
+    "various changes",
+    "wip",
+    "fix bug",
+    "更新文件",
+    "修改代码",
+    "更新代码",
+    "调整配置",
+];
+
+/// Runs the local checks on a parsed message. `changed_names` are the file
+/// names (and stems) the commit touches, so a subject that only repeats one of
+/// them is reported.
+pub fn quality_issues(fields: &CommitFields, changed_names: &[String]) -> Vec<QualityIssue> {
+    let subject = fields.subject.trim();
+    let lower = subject.to_lowercase();
+    let mut issues = Vec::new();
+    if VAGUE_SUBJECTS.contains(&lower.as_str()) {
+        issues.push(QualityIssue::VagueSubject);
+    }
+    if changed_names
+        .iter()
+        .any(|name| !name.trim().is_empty() && name.trim().to_lowercase() == lower)
+    {
+        issues.push(QualityIssue::FileNameOnly);
+    }
+    if subject
+        .chars()
+        .map(|c| if is_wide(c) { 2 } else { 1 })
+        .sum::<usize>()
+        < MIN_SUBJECT_WIDTH
+    {
+        issues.push(QualityIssue::TooShortSubject);
+    }
+    issues
 }
 
 /// The built-in Default template. Named templates in the settings table use
@@ -596,11 +811,10 @@ mod tests {
     #[test]
     fn auto_language_follows_the_ide_locale() {
         let host = openidea_plugin::mock::MockHost::install();
-        let config = Config::load();
         host.set_locale("zh-CN");
-        assert_eq!(config.language.prompt_language(), "Simplified Chinese");
+        assert_eq!(Config::load().language, "Simplified Chinese");
         host.set_locale("en");
-        assert_eq!(config.language.prompt_language(), "English");
+        assert_eq!(Config::load().language, "English");
     }
 
     fn full_fields() -> CommitFields {
@@ -700,5 +914,106 @@ mod tests {
         let config = Config::load();
         let (_, user) = build_prompts(&config, &sample_context(), Task::Generate);
         assert!(user.contains("security (Security hardening)"), "{user}");
+    }
+
+    #[test]
+    fn normalize_fixes_the_fields_models_get_wrong() {
+        let raw = r#"{"type":"FIX","scope":" Core ","subject":"fix the empty queue.","body":"","changes":"BREAKING CHANGE: the old queue API is gone","closes":"Closes: #12, #12 #13","skipCi":" [skip ci] "}"#;
+        let fields = parse_response(raw, &["fix".into()]).expect("it parses");
+        assert_eq!(fields.commit_type, "fix");
+        assert_eq!(fields.scope, "core");
+        assert_eq!(fields.subject, "fix the empty queue");
+        assert_eq!(fields.changes, "the old queue API is gone");
+        assert_eq!(fields.closes, "#12, #13");
+        assert_eq!(fields.skip_ci, "[skip ci]");
+        assert_eq!(
+            render(&fields),
+            "fix(core): fix the empty queue\n\nBREAKING CHANGE: the old queue API is gone\n\nCloses #12, #13\n\n[skip ci]"
+        );
+    }
+
+    #[test]
+    fn a_one_line_body_with_several_sentences_becomes_bullets() {
+        let fields = parse_response(
+            r#"{"type":"fix","subject":"stop the crash","body":"修了空队列。修了重试；修了日志"}"#,
+            &["fix".into()],
+        )
+        .expect("it parses");
+        assert_eq!(fields.body, "- 修了空队列\n- 修了重试\n- 修了日志");
+
+        let english = parse_response(
+            r#"{"type":"fix","subject":"stop the crash","body":"Keeps 1.5 as is. Stops the crash. Leaves e.g. logs alone"}"#,
+            &["fix".into()],
+        )
+        .expect("it parses");
+        assert_eq!(
+            english.body,
+            "- Keeps 1.5 as is.\n- Stops the crash.\n- Leaves e.g. logs alone"
+        );
+
+        let single = parse_response(
+            r#"{"type":"fix","subject":"stop the crash","body":"Moves the lexer out."}"#,
+            &["fix".into()],
+        )
+        .expect("it parses");
+        assert_eq!(
+            single.body, "Moves the lexer out.",
+            "one sentence stays plain text"
+        );
+    }
+
+    #[test]
+    fn quality_flags_vague_short_and_filename_subjects() {
+        let subject = |text: &str| CommitFields {
+            commit_type: "fix".into(),
+            subject: text.into(),
+            ..CommitFields::default()
+        };
+        assert_eq!(
+            quality_issues(&subject("update files"), &[]),
+            vec![QualityIssue::VagueSubject]
+        );
+        assert_eq!(
+            quality_issues(&subject("fix crash"), &[]),
+            vec![QualityIssue::TooShortSubject],
+            "twelve columns: a nine-letter subject is not specific"
+        );
+        assert_eq!(
+            quality_issues(
+                &subject("parser.rs"),
+                &["parser.rs".into(), "parser".into()]
+            ),
+            vec![QualityIssue::FileNameOnly, QualityIssue::TooShortSubject]
+        );
+        assert_eq!(
+            quality_issues(&subject("修复消息队列空指针崩溃"), &["queue.rs".into()]),
+            Vec::new(),
+            "eleven CJK characters are twenty-two columns: specific enough"
+        );
+        assert_eq!(
+            quality_issues(&subject("修复空指针"), &[]),
+            vec![QualityIssue::TooShortSubject],
+            "five CJK characters are ten columns, short even though the reference
+             plugin's character rule would call a longer Latin subject fine"
+        );
+    }
+
+    #[test]
+    fn body_normalization_preserves_flags_and_negative_values() {
+        for body in [
+            "--force is no longer required.",
+            "-1 means unlimited",
+            "*ptr keeps its value",
+            "- --force is no longer required.\n- -1 means unlimited",
+        ] {
+            let raw = serde_json::json!({"type":"fix","subject":"preserve command arguments","body":body});
+            let fields = parse_response(&raw.to_string(), &["fix".into()]).unwrap();
+            let message = render(&fields);
+            for expected in ["--force", "-1", "*ptr"] {
+                if body.contains(expected) {
+                    assert!(message.contains(expected), "lost {expected}: {message}");
+                }
+            }
+        }
     }
 }

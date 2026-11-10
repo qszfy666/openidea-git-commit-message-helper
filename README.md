@@ -6,7 +6,8 @@ This is an OpenIDEA WebAssembly plugin (Rust SDK, plugin API 1.4). It is inspire
 
 ## What it does
 
-- Adds three buttons to the message toolbar of the Commit tool window and the Commit dialog (`commit.message`): **Generate Commit Message**, **Generate Commit Message with Requirements**, and **Format Commit Message**.
+- Adds four buttons to the message toolbar of the Commit tool window and the Commit dialog (`commit.message`): **Generate Commit Message**, **Generate Commit Message with Requirements**, **Format Commit Message**, and **Edit Commit Message Fields** (opens the manual editor tool window). Each one can be hidden on its own in the settings.
+- A manual editor for the same fields: a tool-window form of `type`, `scope`, `subject`, `body`, `changes`, `closes` and the Skip CI marker. Applying renders it locally with your template — no model call — and writes it into the commit field under the same revision check. The form keeps what you typed per project, so closing it mid-edit loses nothing.
 - **With Requirements** opens a multi-line dialog for business background, a bug description, issue references or a Skip CI request; the text goes into this one generation only. **Format Commit Message** rewrites the draft already in the message field into the structured fields, preserving its facts, issue numbers and language.
 - Reads exactly the files and changed blocks included in the commit through `host::pending_commit()` — including partial hunk selections. Unsaved editors of those files are saved first, as Commit does.
 - Sends their status and included diffs (trimmed per hunk and by a character budget) to your LLM, plus the last five commit subjects from `Project::vcs_log()` as a style reference. History is only a style hint: the working-tree `vcs_diff()` is never used, and the generated content stays grounded in the selected changes.
@@ -17,7 +18,8 @@ This is an OpenIDEA WebAssembly plugin (Rust SDK, plugin API 1.4). It is inspire
 - Shows that it is running: an empty message field holds `Generating commit message…` until the result replaces it (a field you already typed in stays untouched), with the progress task in the status bar either way.
 - Writes the generated message into the native commit message field with `host::set_commit_message()`. If you type or change the included changes while the model is answering, the revision check rejects the write and your current text is preserved.
 - Retries a request a model refuses because of `max_tokens` (switching to `max_completion_tokens`) or `temperature` (dropping it). All attempts share one 50 s budget inside the host's 60 s task window; a **Send temperature** setting can also omit the parameter up front.
-- Reports what was actually sent — request URL, token parameter, temperature, attempt count and any compatibility adjustment — in the success notification and in the **Test** result.
+- Reports what was actually sent — request URL, token parameter, temperature, attempt count, any compatibility adjustment and whether it came from the cache — in the success notification and in the **Test** result.
+- Checks the generated subject locally (vague, only a file name, shorter than twelve columns) and lists the finding in the notification without rewriting what you got.
 - Review the message in the Commit panel and commit when ready. The same command is available from **Find Action** and the keymap (`⌥⌘G` / `Ctrl+Alt+G`).
 
 ## Requirements
@@ -63,7 +65,7 @@ Open **Settings › Plugins** to load the change. The plugin appears as **Git Co
 
 | Page | Settings |
 | --- | --- |
-| Commit | Commit message language (`auto` follows the IDE interface language, or Chinese/English), maximum diff characters, allowed commit types (a title + description table; the description is included in the prompt). |
+| Commit | Commit message language (any language name; `auto` follows the IDE interface language), maximum diff characters, allowed commit types (a title + description table; the description is included in the prompt), the editor's field visibility and type order, the Skip CI markers, and which of the four buttons the Commit panel shows. |
 | Prompts | Extra system prompt for persistent preferences, prompt profile table and **Default prompt profile**. |
 | Commit Templates | Output template table, **Default template**, and three actions: **Preview** (render an edited template with chosen example fields), **Variables** (syntax, example and errors), **Restore Default** (copy the built-in template). |
 | LLM Settings | Provider preset, API protocol, Base URL, Model, Temperature, **Send temperature**, Max response tokens, Thinking group (level, preset, custom mapping), model profile table and **Active model profile**; and five page actions: **Test**, **Models**, **Request URL**, **Thinking Levels** (levels the mapping offers), **Thinking Help** (mapping rules and preset template). Every action applies pending settings first. |
@@ -116,6 +118,22 @@ The plugin declares these optional network capabilities; grant the ones you use:
 
 Magpie example: provider **Magpie**, Base URL `http://127.0.0.1:3425`, model your Magpie model name. Plain HTTP is allowed only to loopback by the IDE.
 
+### Manual editor
+
+The **Commit Message Editor** tool window (also opened by the **Edit Commit Message Fields** button above the commit message) is a form of the seven commit fields: type, scope, subject, body, breaking change, closes and the Skip CI marker. **Write to commit message** renders the fields locally with the active template — no model call — and replaces the existing commit text. The header is validated before writing; invalid fields keep the original commit text and the editor draft. The `revision` check protects changes made after the commit draft is read. Choice and checkbox changes update the displayed values.
+
+The **Commit** settings page shapes that form: each field can be hidden (the subject is always shown), **Type option order** keeps the settings-table order or puts the first **Common types shown first** rows on top, and **Skip CI markers** is a table of markers with **Default Skip CI marker** and **Skip CI checked by default**. The host's form draws a dropdown for a choice, so a radio list is not available.
+
+The form keeps what you typed per project in the plugin's own storage: close the tool window mid-edit and the fields are still there next time, in that project only. Applying or clearing the form drops the draft.
+
+### Buttons and interface languages
+
+**Buttons** in the Commit settings decides which of the four buttons above the commit message are visible: Generate, Generate with Requirements, Format and Edit Fields. A hidden button is removed from the toolbar (the command stays reachable from Find Action). The plugin publishes the four choices as context keys at start-up and whenever a setting changes.
+
+The commit language is any language name you type, for example `English`, `Simplified Chinese`, `Japanese`, `한국어` or `繁體中文`; `auto` or a blank value follows the IDE interface language. The plugin's own text — notifications, dialogs and the editor's labels — follows that language too: English, Simplified Chinese, Japanese and Korean are built in, and other languages fall back to English.
+
+The generated message is also checked locally before it is written (a vague subject, a subject that is only a changed file name, a subject shorter than twelve columns). The finding is listed in the notification and nothing is rewritten; a correction request is a separate item.
+
 ### Why these capabilities
 
 | Capability | Why the plugin needs it |
@@ -123,6 +141,8 @@ Magpie example: provider **Magpie**, Base URL `http://127.0.0.1:3425`, model you
 | `vcs.read` | Read the commit being prepared (the included files, their diffs), the repository root/branch, and the last five commit subjects as a style reference. Nothing else is read. |
 | `vcs.write` | Write the generated text into the commit message field (`set_commit_message`). The plugin never commits, stages, fetches or pushes. |
 | `secrets` | Keep the LLM API key in the OS keychain and let the IDE fill it into requests; plugin code never sees the value. |
+| `storage` | Keep the manual editor's draft per project and remember which request parameters an endpoint refused, so they are not asked for again. Uninstalling the plugin deletes it. |
+| `events` | Subscribe to `settings-changed`, so hiding or showing a button takes effect immediately. Nothing else is subscribed. |
 | `net:<host>` (optional) | Send the prompt, the model-list request and the connection test to the LLM endpoint you configure. One optional host per preset provider; grant only the one you use. `127.0.0.1`/`localhost` are for local servers (Magpie, Ollama). |
 | `clipboard` (optional) | Copy the model id chosen in the **Models** picker, the built-in template from **Restore Default**, and the preset mapping from **Thinking Help**. Without it the text is shown in a notification instead. |
 
@@ -136,7 +156,7 @@ No `process:`, `fs:` or `ide.commands` capability is requested, and there is no 
 
 The endpoint URL is completed from the Base URL: a path-less URL gets `/v1`; a URL that already has a path gets the protocol suffix (`/chat/completions`, `/responses`, `/messages`); a URL that already ends in the suffix is used as-is.
 
-Chat Completions sends `max_tokens`, Responses `max_output_tokens`, Anthropic `max_tokens`. If a model answers 4xx refusing `max_tokens` in favour of `max_completion_tokens`, or refusing `temperature`, the plugin removes just that parameter and retries; other failures (bad key, server error) are reported, not retried. At most three attempts share the 50 s budget. Thinking fragments are merged into the same request body after validation; a 4xx refusal of a thinking field is reported, not retried.
+Chat Completions sends `max_tokens`, Responses `max_output_tokens`, Anthropic `max_tokens`. If a model answers 4xx refusing `max_tokens` in favour of `max_completion_tokens`, or refusing `temperature`, the plugin removes just that parameter and retries; other failures (bad key, server error) are reported, not retried. At most three attempts share the 50 s budget. What a server refused is remembered per endpoint, model, protocol, thinking mapping and configured temperature in the plugin's storage, so the next request starts from the accepted shape instead of asking again; changing the temperature sends the new value, and the request diagnostics name the cached adjustment. Thinking fragments are merged into the same request body after validation; a 4xx refusal of a thinking field is reported, not retried.
 
 ## Privacy
 

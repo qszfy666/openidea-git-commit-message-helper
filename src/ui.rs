@@ -38,6 +38,26 @@ pub struct Strings {
     pub thinking_unavailable: &'static str,
     pub mapping_error: &'static str,
     pub thinking_help: &'static str,
+    pub quality_prefix: &'static str,
+    pub quality_vague: &'static str,
+    pub quality_filename: &'static str,
+    pub quality_short: &'static str,
+    pub list_separator: &'static str,
+    pub field_type: &'static str,
+    pub field_scope: &'static str,
+    pub field_subject: &'static str,
+    pub field_body: &'static str,
+    pub field_changes: &'static str,
+    pub field_closes: &'static str,
+    pub field_skip_ci: &'static str,
+    pub field_skip_ci_on: &'static str,
+    pub editor_apply: &'static str,
+    pub editor_clear: &'static str,
+    pub editor_hint: &'static str,
+    pub editor_applied: &'static str,
+    pub editor_cleared: &'static str,
+    pub editor_invalid_header: &'static str,
+    pub editor_no_subject: &'static str,
 }
 
 const ZH: Strings = Strings {
@@ -74,6 +94,26 @@ const ZH: Strings = Strings {
     thinking_unavailable: "当前等级没有对应映射，请求将按 Model default 处理（不发送思考参数）。",
     mapping_error: "映射错误",
     thinking_help: "思考参数按模型档案配置。\n等级：DEFAULT（不发送）、DISABLED、ENABLED、LOW、MEDIUM、HIGH、MAX。预设：model-default、auto、openai-effort、nested-effort、thinking-object、enable-thinking、anthropic-budget、anthropic-adaptive、custom。\n映射：按等级名作键的 JSON 对象，每个值是非空的请求片段，例如 {\"HIGH\":{\"reasoning_effort\":\"high\"}}。$thinking_budget 只能出现在 thinking.budget_tokens，会按 Max response tokens 的一部分解析（不小于 1024 且小于上限）。保留字段（model、messages、system、temperature、max_tokens 等）、null 值、超过 12 层嵌套和超过 64 KiB 的映射都会被拒绝。\n恢复：清空 Thinking mapping 列即使用预设模板（下方已复制）；Thinking Levels 列出当前映射实际提供的等级。请求诊断会显示实际发送的内容。",
+    quality_prefix: "质量提示",
+    quality_vague: "标题只重复了动作（如「修改代码」），没有说出具体改了什么",
+    quality_filename: "标题只是改动文件名",
+    quality_short: "标题过短（不足 12 个字符宽）",
+    list_separator: "；",
+    field_type: "类型",
+    field_scope: "影响范围 scope",
+    field_subject: "标题 subject",
+    field_body: "正文 body",
+    field_changes: "破坏性变更 changes",
+    field_closes: "关联 issue closes",
+    field_skip_ci: "Skip CI 标记",
+    field_skip_ci_on: "写入该标记",
+    editor_apply: "写入提交信息",
+    editor_clear: "清空表单",
+    editor_hint: "填写后点「写入提交信息」，按当前模板替换提交面板中的已有文本。若提交草稿在读取后又发生变化，本次写入会取消，保留最新文本。",
+    editor_applied: "已写入提交面板的提交信息框，请检查后提交。",
+    editor_cleared: "表单已清空。",
+    editor_invalid_header: "提交类型必须来自允许列表；类型、范围和标题必须符合提交标题约束。未写入提交面板，表单草稿已保留。",
+    editor_no_subject: "标题不能为空，没有写入提交面板。",
 };
 
 const EN: Strings = Strings {
@@ -110,10 +150,158 @@ const EN: Strings = Strings {
     thinking_unavailable: "The selected level has no mapping; the request uses Model default and sends no thinking parameters.",
     mapping_error: "Mapping error",
     thinking_help: "Thinking parameters are per model profile.\nLevel: DEFAULT (send nothing), DISABLED, ENABLED, LOW, MEDIUM, HIGH, MAX. Preset: model-default, auto, openai-effort, nested-effort, thinking-object, enable-thinking, anthropic-budget, anthropic-adaptive, custom.\nMapping: a JSON object keyed by level; each value is a non-empty request fragment, e.g. {\"HIGH\":{\"reasoning_effort\":\"high\"}}. $thinking_budget is valid only at thinking.budget_tokens and resolves to a share of Max response tokens (>= 1024 and < the limit). Reserved fields (model, messages, system, temperature, max_tokens, …), null values, nesting deeper than 12 levels and mappings over 64 KiB are rejected.\nRestore: clear the Thinking mapping column to use the preset template (copied below), or run Thinking Levels to see which levels the mapping offers. Request diagnostics show what was actually sent.",
+    quality_prefix: "Quality check",
+    quality_vague: "the subject only restates the act (\"modify code\"), not what changed",
+    quality_filename: "the subject is only a changed file name",
+    quality_short: "the subject is shorter than 12 columns",
+    list_separator: "; ",
+    field_type: "Type",
+    field_scope: "Scope",
+    field_subject: "Subject",
+    field_body: "Body",
+    field_changes: "Breaking change",
+    field_closes: "Closes",
+    field_skip_ci: "Skip CI marker",
+    field_skip_ci_on: "Write the marker",
+    editor_apply: "Write to commit message",
+    editor_clear: "Clear the form",
+    editor_hint: "Press Write to commit message to replace existing commit text using the active template. If the commit draft changes after it is read, the write is cancelled and the latest text is kept.",
+    editor_applied: "Written into the Commit panel's message field; review it before committing.",
+    editor_cleared: "The form is empty.",
+    editor_invalid_header: "The type must be allowed, and type, scope and subject must form a valid single-line header. Nothing was written; the editor draft is kept.",
+    editor_no_subject: "The subject is empty, so nothing was written to the Commit panel.",
+};
+
+const JA: Strings = Strings {
+    no_repository: "このウィンドウに Git リポジトリが開かれていません。",
+    no_changes: "コミット パネルに変更が含まれていません。",
+    no_draft: "コミットメッセージが空のため、整形する内容がありません。",
+    not_configured: "LLM API キーが未設定です。設定 › プラグイン › インストール済み で Git Commit Message Helper を選び、シークレットに LLM API キーを入力して保存してください。",
+    collecting: "コミット パネルの変更を読み取っています…",
+    generating: "モデルを呼び出しています…",
+    generating_now: "コミットメッセージを生成しています…",
+    generated: "コミットメッセージを生成しました。コミット前に確認してください。",
+    canceled: "中止しました。",
+    stale: "コミット ドラフトが変わりました。入力中のコミットメッセージは上書きしていません。",
+    bad_response: "モデルの応答をコミット情報の JSON として解釈できませんでした。再試行するか別のモデルを使ってください。",
+    error_prefix: "生成に失敗しました",
+    test_ok: "LLM 接続は正常です。",
+    requirements_prompt: "このコミットの追加要件（背景、不具合の内容、issue、Skip CI など。空のまま中止）",
+    pick_model: "モデルを選択",
+    model_hint: "モデル ID をクリップボードにコピーしました。LLM 設定の「モデル」に貼り付けてください。",
+    model_copy_failed: "クリップボードに書き込めませんでした。このモデル ID を LLM 設定の「モデル」に入力してください。",
+    request_url: "リクエスト URL",
+    key_slot: "キー スロット",
+    template_fallback: "テンプレートが不正なため、組み込みの既定テンプレートで描画しました:",
+    preview_fields_prompt: "値を持たせるサンプル項目を選択してください（未選択の項目は空になり、その条件セクションは出力されません）",
+    preview_template_prompt: "テンプレートを編集して確定するとプレビューします。繰り返し編集できます。中止すると終了します。",
+    preview_result: "テンプレートのプレビュー",
+    preview_error: "テンプレートのエラー",
+    template_help: "コミットテンプレートの変数: {{type}}、{{scope}}、{{subject}}、{{body}}、{{changes}}、{{closes}}、{{skipCi}}、{{header}}（= type(scope): subject）。\n条件セクション: {{#body}}…{{/body}} はその項目が空でないときだけ出力されます。上記のどの変数もセクション名に使えます。変数の外のテキストはそのまま残るため、最終行をフッターにできます。\n例: {{header}}{{#body}}\n\n{{body}}{{/body}}{{#closes}}\n\nCloses {{closes}}{{/closes}}\nエラー: 不明な変数、閉じていない '{{'、対応しないセクション名、入れ子のセクション、閉じられていないセクション。プレビューはエラーを表示し、生成時は組み込みの既定テンプレートに戻して通知で理由を示します。\n復元: このページの「既定に戻す」で組み込みテンプレートをコピーするか、「既定のテンプレート」を空にしてください。",
+    copy_ok: "クリップボードにコピーしました。設定に貼り付けてください:",
+    copy_failed: "クリップボードに書き込めませんでした。下のテキストを手動でコピーしてください:",
+    thinking_preset: "プリセット",
+    thinking_selected: "現在のレベル",
+    thinking_available: "利用可能なレベル",
+    thinking_unavailable: "現在のレベルに対応するマッピングがないため、リクエストはモデルの既定として扱われ、思考パラメータを送信しません。",
+    mapping_error: "マッピングのエラー",
+    thinking_help: "思考パラメータはモデル プロファイルごとに設定します。\nレベル: DEFAULT（送信しない）、DISABLED、ENABLED、LOW、MEDIUM、HIGH、MAX。プリセット: model-default、auto、openai-effort、nested-effort、thinking-object、enable-thinking、anthropic-budget、anthropic-adaptive、custom。\nマッピング: レベル名をキーにした JSON オブジェクトで、各値は空でないリクエスト断片です（例: {\"HIGH\":{\"reasoning_effort\":\"high\"}}）。$thinking_budget は thinking.budget_tokens でのみ有効で、応答トークン上限の一部として解決されます（1024 以上かつ上限未満）。予約フィールド（model、messages、system、temperature、max_tokens など）、null 値、12 階層を超える入れ子、64 KiB を超えるマッピングは拒否されます。\n復元: 思考マッピング列を空にするとプリセットのテンプレートを使います（下にコピー済み）。「思考レベル」でこのマッピングが実際に提供するレベルを確認できます。リクエスト診断には実際に送信した内容が出ます。",
+    quality_prefix: "品質チェック",
+    quality_vague: "タイトルが動作の言い換え（「コードを修正」など）だけで、何を変えたかを示していません",
+    quality_filename: "タイトルが変更したファイル名だけになっています",
+    quality_short: "タイトルが短すぎます（12 桁未満）",
+    list_separator: "、",
+    field_type: "種別",
+    field_scope: "スコープ",
+    field_subject: "タイトル",
+    field_body: "本文",
+    field_changes: "破壊的変更",
+    field_closes: "Closes",
+    field_skip_ci: "Skip CI マーカー",
+    field_skip_ci_on: "このマーカーを書き込む",
+    editor_apply: "コミットメッセージに書き込む",
+    editor_clear: "フォームを空にする",
+    editor_hint: "「コミットメッセージに書き込む」で、現在のテンプレートを使って既存テキストを置き換えます。ドラフト読み取り後に変更があれば書き込みを中止し、最新のテキストを保持します。",
+    editor_applied: "コミット パネルのメッセージ欄に書き込みました。コミット前に確認してください。",
+    editor_cleared: "フォームを空にしました。",
+    editor_invalid_header: "種別は許可リストから選び、種別・スコープ・タイトルは有効な1行ヘッダーにしてください。書き込まず、フォームのドラフトを保持しました。",
+    editor_no_subject: "タイトルが空のため、コミット パネルには何も書き込んでいません。",
+};
+
+const KO: Strings = Strings {
+    no_repository: "이 창에 Git 저장소가 열려 있지 않습니다.",
+    no_changes: "커밋 패널에 포함된 변경이 없습니다.",
+    no_draft: "커밋 메시지가 비어 있어 서식을 정리할 내용이 없습니다.",
+    not_configured: "LLM API 키가 없습니다. 설정 › 플러그인 › 설치됨에서 Git Commit Message Helper를 선택하고 시크릿에 LLM API 키를 입력한 뒤 저장하세요.",
+    collecting: "커밋 패널의 변경을 읽는 중…",
+    generating: "모델을 호출하는 중…",
+    generating_now: "커밋 메시지를 생성하는 중…",
+    generated: "커밋 메시지를 생성했습니다. 커밋하기 전에 확인하세요.",
+    canceled: "취소했습니다.",
+    stale: "커밋 초안이 바뀌었습니다. 입력 중인 커밋 메시지는 덮어쓰지 않았습니다.",
+    bad_response: "모델 응답을 커밋 정보 JSON으로 해석하지 못했습니다. 다시 시도하거나 다른 모델을 사용하세요.",
+    error_prefix: "생성 실패",
+    test_ok: "LLM 연결이 정상입니다.",
+    requirements_prompt: "이 커밋의 추가 요구 사항(배경, 버그 설명, issue, Skip CI 등. 비워 두면 취소)",
+    pick_model: "모델 선택",
+    model_hint: "모델 ID를 클립보드에 복사했습니다. LLM 설정의 모델에 붙여 넣으세요.",
+    model_copy_failed: "클립보드에 쓰지 못했습니다. 이 모델 ID를 LLM 설정의 모델에 직접 입력하세요.",
+    request_url: "요청 URL",
+    key_slot: "키 슬롯",
+    template_fallback: "템플릿이 올바르지 않아 내장 기본 템플릿으로 렌더링했습니다:",
+    preview_fields_prompt: "값을 넣을 예시 항목을 선택하세요(선택하지 않은 항목은 비어 있어 해당 조건 섹션이 출력되지 않습니다)",
+    preview_template_prompt: "템플릿을 편집하고 확인하면 미리 봅니다. 계속 편집할 수 있습니다. 닫으면 종료합니다.",
+    preview_result: "템플릿 미리보기",
+    preview_error: "템플릿 오류",
+    template_help: "커밋 템플릿 변수: {{type}}, {{scope}}, {{subject}}, {{body}}, {{changes}}, {{closes}}, {{skipCi}}, {{header}}(= type(scope): subject).\n조건 섹션: {{#body}}…{{/body}}는 해당 항목이 비어 있지 않을 때만 출력됩니다. 위의 어떤 변수든 섹션 이름으로 쓸 수 있습니다. 변수 밖의 텍스트는 그대로 남으므로 마지막 줄을 footer로 쓸 수 있습니다.\n예: {{header}}{{#body}}\n\n{{body}}{{/body}}{{#closes}}\n\nCloses {{closes}}{{/closes}}\n오류: 알 수 없는 변수, 닫히지 않은 '{{', 짝이 맞지 않는 섹션 이름, 중첩 섹션, 닫히지 않은 섹션. 미리보기는 오류를 보여 주고, 생성 시에는 내장 기본 템플릿으로 돌아가 알림에 이유를 적습니다.\n복원: 이 페이지의 '기본값 복원'으로 내장 템플릿을 복사하거나 '기본 템플릿'을 비우세요.",
+    copy_ok: "클립보드에 복사했습니다. 설정에 붙여 넣으세요:",
+    copy_failed: "클립보드에 쓰지 못했습니다. 아래 텍스트를 직접 복사하세요:",
+    thinking_preset: "프리셋",
+    thinking_selected: "현재 수준",
+    thinking_available: "사용 가능한 수준",
+    thinking_unavailable: "현재 수준에 대응하는 매핑이 없어 요청은 모델 기본으로 처리되며 사고 매개변수를 보내지 않습니다.",
+    mapping_error: "매핑 오류",
+    thinking_help: "사고 매개변수는 모델 프로필마다 설정합니다.\n수준: DEFAULT(보내지 않음), DISABLED, ENABLED, LOW, MEDIUM, HIGH, MAX. 프리셋: model-default, auto, openai-effort, nested-effort, thinking-object, enable-thinking, anthropic-budget, anthropic-adaptive, custom.\n매핑: 수준 이름을 키로 하는 JSON 객체이며 각 값은 비어 있지 않은 요청 조각입니다(예: {\"HIGH\":{\"reasoning_effort\":\"high\"}}). $thinking_budget은 thinking.budget_tokens에서만 쓸 수 있고 응답 토큰 상한의 일부로 계산됩니다(1024 이상, 상한 미만). 예약 필드(model, messages, system, temperature, max_tokens 등), null 값, 12단계보다 깊은 중첩, 64 KiB를 넘는 매핑은 거부됩니다.\n복원: 사고 매핑 열을 비우면 프리셋 템플릿을 사용합니다(아래에 복사됨). '사고 수준'에서 이 매핑이 실제로 제공하는 수준을 확인할 수 있습니다. 요청 진단에는 실제로 보낸 내용이 나옵니다.",
+    quality_prefix: "품질 점검",
+    quality_vague: "제목이 동작을 다시 말할 뿐(\"코드 수정\" 등) 무엇이 바뀌었는지 말하지 않습니다",
+    quality_filename: "제목이 변경된 파일 이름뿐입니다",
+    quality_short: "제목이 너무 짧습니다(12칸 미만)",
+    list_separator: ", ",
+    field_type: "유형",
+    field_scope: "범위",
+    field_subject: "제목",
+    field_body: "본문",
+    field_changes: "호환성 파괴 변경",
+    field_closes: "Closes",
+    field_skip_ci: "Skip CI 마커",
+    field_skip_ci_on: "이 마커 쓰기",
+    editor_apply: "커밋 메시지에 쓰기",
+    editor_clear: "양식 비우기",
+    editor_hint: "'커밋 메시지에 쓰기'를 누르면 현재 템플릿으로 기존 커밋 텍스트를 교체합니다. 초안을 읽은 뒤 변경이 생기면 쓰기를 취소하고 최신 텍스트를 유지합니다.",
+    editor_applied: "커밋 패널의 메시지 입력란에 썼습니다. 커밋하기 전에 확인하세요.",
+    editor_cleared: "양식을 비웠습니다.",
+    editor_invalid_header: "허용된 유형을 선택하고 유형, 범위, 제목이 유효한 한 줄 헤더를 이루도록 입력하세요. 커밋에 쓰지 않았으며 양식 초안은 유지됩니다.",
+    editor_no_subject: "제목이 비어 있어 커밋 패널에 아무것도 쓰지 않았습니다.",
 };
 
 pub fn strings(language: UiLanguage) -> &'static Strings {
-    if language.is_zh() { &ZH } else { &EN }
+    match language {
+        UiLanguage::Zh => &ZH,
+        UiLanguage::Ja => &JA,
+        UiLanguage::Ko => &KO,
+        UiLanguage::En => &EN,
+    }
+}
+
+impl crate::prompt::QualityIssue {
+    /// The notification text for one finding.
+    pub fn text(self, strings: &Strings) -> &'static str {
+        match self {
+            crate::prompt::QualityIssue::VagueSubject => strings.quality_vague,
+            crate::prompt::QualityIssue::FileNameOnly => strings.quality_filename,
+            crate::prompt::QualityIssue::TooShortSubject => strings.quality_short,
+        }
+    }
 }
 
 /// Clips text for a notification body.
@@ -124,5 +312,21 @@ pub fn clip(text: &str, max: usize) -> String {
         format!("{clipped}…")
     } else {
         clipped
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::UiLanguage;
+
+    #[test]
+    fn every_language_has_its_own_text() {
+        assert_eq!(strings(UiLanguage::Zh).canceled, "已取消。");
+        assert_eq!(strings(UiLanguage::En).canceled, "Cancelled.");
+        assert_eq!(strings(UiLanguage::Ja).canceled, "中止しました。");
+        assert_eq!(strings(UiLanguage::Ko).canceled, "취소했습니다.");
+        assert_eq!(strings(UiLanguage::Ja).field_subject, "タイトル");
+        assert_eq!(strings(UiLanguage::Ko).field_subject, "제목");
     }
 }
