@@ -453,6 +453,33 @@ pub fn render(fields: &CommitFields) -> String {
     render_template(fields, DEFAULT_TEMPLATE).expect("the built-in template is valid")
 }
 
+/// The fields the template preview lets the user switch on and off.
+pub const EXAMPLE_FIELDS: [&str; 7] = [
+    "type", "scope", "subject", "body", "changes", "closes", "skipCi",
+];
+
+/// Example values for a preview: a selected field gets a visible placeholder,
+/// an unselected one stays empty so its conditional section is skipped.
+/// `header` is derived from `type` and `subject` by the renderer.
+pub fn example_fields(selected: &[String]) -> CommitFields {
+    let value = |name: &str| {
+        if selected.iter().any(|key| key == name) {
+            format!("<{name}>")
+        } else {
+            String::new()
+        }
+    };
+    CommitFields {
+        commit_type: value("type"),
+        scope: value("scope"),
+        subject: value("subject"),
+        body: value("body"),
+        changes: value("changes"),
+        closes: value("closes"),
+        skip_ci: value("skipCi"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -647,6 +674,17 @@ mod tests {
                 .unwrap_err()
                 .contains("unclosed")
         );
+    }
+
+    #[test]
+    fn example_fields_only_fill_the_selected_ones() {
+        let fields = example_fields(&["type".into(), "subject".into(), "body".into()]);
+        assert_eq!(
+            render_template(&fields, DEFAULT_TEMPLATE).unwrap(),
+            "<type>: <subject>\n\n<body>"
+        );
+        assert!(fields.scope.is_empty());
+        assert!(fields.closes.is_empty());
     }
 
     #[test]

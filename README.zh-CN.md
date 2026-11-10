@@ -11,7 +11,9 @@
 - 通过 `host::pending_commit()` 读取本次提交实际包含的文件和代码块（包括部分 hunk 选择）；读取前会像 Commit 一样保存相关文件的未保存编辑器。
 - 把这些文件的状态和实际包含的 diff（按 hunk 裁剪并受字符预算限制）发送给 LLM，另附 `Project::vcs_log()` 取到的最近五条提交标题作为风格参考。历史只作风格提示：不使用工作区的 `vcs_diff()`，生成内容仍以所选变更为准。
 - 模型返回结构化字段（`type`、`scope`、`subject`、`body`、`changes`、`closes`、`skipCi`）；插件在本地渲染成最终提交信息，保证格式一致。
-- 配置可复用：多组模型档案（各有自己的输出 token 上限和密钥槽）、写作偏好档案和输出模板档案可随时切换；项目可以选择自己的默认档案，未配置时继承全局选择。
+- 配置可复用：多组模型档案（各有自己的输出 token 上限、密钥槽和思考设置）、写作偏好档案和输出模板档案可随时切换；项目可以选择自己的默认档案，未配置时继承全局选择。
+- 按模型配置思考参数：选择等级和预设（或自定义 JSON 映射），插件会校验映射、按响应 token 上限解析 `thinking.budget_tokens`，并在诊断里显示实际发送的内容。默认不发送思考参数，已有请求形态不变。
+- 输出模板可先预览再保存：选择哪些示例字段有值，在对话框里编辑模板即可看到渲染结果；**Variables** 说明语法，**Restore Default** 复制内置模板。
 - 点击后能看出正在执行：提交信息框为空时会先写入「正在生成提交信息…」，生成完再替换成结果（你已经输入过内容的框不会被动），状态栏也有进度任务。
 - 通过 `host::set_commit_message()` 把生成结果写回原生提交信息框。如果生成期间你修改了提交信息或勾选内容，版本号校验会拒绝写入，当前文本不会被覆盖。
 - 模型明确拒绝 `max_tokens`（要求改用 `max_completion_tokens`）或 `temperature` 时，只去掉该参数再重试一次；所有尝试共享 50 秒预算，处于宿主 60 秒后台任务窗口内。**Send temperature** 设置也可以一开始就省略温度。
@@ -36,7 +38,7 @@ cargo test
 cargo build --release --target wasm32-wasip2
 mkdir -p dist
 cp target/wasm32-wasip2/release/openidea_plugin_commit_message_helper.wasm dist/plugin.wasm
-openidea-plugin pack . --out dist/qszfy666.commit-message-helper-0.7.0.oiplugin   # 未签名，本地安装用
+openidea-plugin pack . --out dist/qszfy666.commit-message-helper-0.7.1.oiplugin   # 未签名，本地安装用
 ```
 
 然后：
@@ -54,8 +56,8 @@ openidea-plugin pack . --out dist/qszfy666.commit-message-helper-0.7.0.oiplugin 
 | --- | --- |
 | Commit | 提交信息语言（`auto` 跟随 IDE 界面语言，或指定中文/英文）、diff 字符上限、允许的提交类型（「标题＋描述」表格，描述会写进 prompt）。 |
 | Prompts | 额外的系统提示词、提示词档案表格与 **Default prompt profile**。 |
-| Commit Templates | 输出模板档案表格与 **Default template**。 |
-| LLM Settings | Provider 预设、API 协议、Base URL、Model、Temperature、**Send temperature**、Max response tokens、模型档案表格与 **Active model profile**；以及三个页面动作：**Test**（最小请求，并给出请求诊断）、**Models**（列出端点的模型 id）、**Request URL**（显示生成请求的实际地址）。三个动作都会先应用待保存设置。 |
+| Commit Templates | 输出模板档案表格、**Default template**，以及三个动作：**Preview**（用所选示例字段渲染编辑中的模板）、**Variables**（变量说明、示例与错误）、**Restore Default**（复制内置模板）。 |
+| LLM Settings | Provider 预设、API 协议、Base URL、Model、Temperature、**Send temperature**、Max response tokens、Thinking 组（等级、预设、自定义映射）、模型档案表格与 **Active model profile**；以及五个页面动作：**Test**、**Models**、**Request URL**、**Thinking Levels**（映射实际提供的等级）、**Thinking Help**（映射规则与预设模板）。五个动作都会先应用待保存设置。 |
 
 API Key 是插件 secret，不在这四页里：**Settings › Plugins › 已安装里选中 Git Commit Message Helper › 右侧「密钥」› LLM API key › 保存**。共四个密钥槽（`api-key`、`api-key-2`、`api-key-3`、`api-key-4`），模型档案在 **Key slot** 列选择其中一个。它们存在系统钥匙串，不写入设置文件。
 
@@ -87,9 +89,21 @@ Signed-off-by: Team
 
 三个选择项都是普通设置键，宿主按 project over global 解析：项目层有值就用项目值，项目里留空即继承全局选择；档案表格本身也按同一规则分层，两层档案库不合并。
 
+### 模板预览与帮助
+
+Commit Templates 页有三个动作。**Preview** 先用多选决定哪些示例字段有值，再打开预填活动模板的多行输入框：确认即看到渲染结果，可反复修改，取消结束；模板错误会直接显示，不必等生成时才回退。**Variables** 列出八个变量、条件段、示例、错误类型和恢复入口。**Restore Default** 把内置 Default 模板复制到剪贴板（剪贴板未授权时在通知里显示），粘贴到 Template 列或清空 **Default template** 即可恢复。声明式设置对插件只读，也没有表格编辑事件，所以预览是「编辑 → 预览 → 再编辑」的命令循环，不是设置页内的随改随刷。
+
+### 思考参数
+
+LLM Settings 的 Thinking 组（模型档案表格也有同三列）包含 **Thinking level**、**Thinking preset** 和 **Thinking mapping**。等级为 `DEFAULT`、`DISABLED`、`ENABLED`、`LOW`、`MEDIUM`、`HIGH`、`MAX`；预设为 `model-default`（不发送）、`auto`（按档案协议选标准字段）、`openai-effort`、`nested-effort`、`thinking-object`、`enable-thinking`、`anthropic-budget`、`anthropic-adaptive` 和 `custom`。默认值保持 0.7.0 的请求体不变。
+
+映射是按等级名作键的 JSON 对象，值为请求片段，例如 `{"HIGH":{"reasoning_effort":"high"}}`；填写后覆盖预设模板，清空即恢复。插件拒绝非法 JSON、未知等级、隐式 `DEFAULT`、空片段、null、保留请求字段（`model`、`messages`、`temperature`、各 token 字段等）、`thinking.budget_tokens` 之外的 `$thinking_budget`、超过 12 层嵌套和超过 64 KiB 的映射。`$thinking_budget` 按等级占 **Max response tokens** 的 25/50/75/90%，不小于 1024、小于上限，并为答案预留 256 token；显式数字同样校验。
+
+声明式 enum 列无法条件化，**Thinking Levels** 显示映射实际提供的等级；等级没有映射、映射无效或预算不可用时按 Model default 发送，请求诊断写明原因。**Thinking Help** 说明格式、显示当前校验结果并复制预设模板。服务端以 4xx 明确拒绝思考字段时直接报告，不重试（思考参数的兼容重试与缓存不在本批）。
+
 插件声明的可选网络能力（按需授权）：
 
-`api.openai.com`、`api.anthropic.com`、`api.deepseek.com`、`dashscope.aliyuncs.com`、`api.moonshot.cn`、`open.bigmodel.cn`、`api.minimax.chat`、`api.siliconflow.cn`、`ark.cn-beijing.volces.com`、`*.openai.azure.com`、`openrouter.ai`、`api.groq.com`、`api.mistral.ai`、`generativelanguage.googleapis.com`、`127.0.0.1`（Magpie、本地服务）、`localhost`（Ollama）。`clipboard`（可选）仅用于复制选中的模型 id。
+`api.openai.com`、`api.anthropic.com`、`api.deepseek.com`、`dashscope.aliyuncs.com`、`api.moonshot.cn`、`open.bigmodel.cn`、`api.minimax.chat`、`api.siliconflow.cn`、`ark.cn-beijing.volces.com`、`*.openai.azure.com`、`openrouter.ai`、`api.groq.com`、`api.mistral.ai`、`generativelanguage.googleapis.com`、`127.0.0.1`（Magpie、本地服务）、`localhost`（Ollama）。`clipboard`（可选）用于复制选中的模型 id、内置模板和预设思考映射。
 
 Magpie 示例：Provider 选 **Magpie**，Base URL 填 `http://127.0.0.1:3425`，Model 填 Magpie 里对应的模型名。IDE 只允许对 loopback 使用明文 HTTP。
 
@@ -101,7 +115,7 @@ Magpie 示例：Provider 选 **Magpie**，Base URL 填 `http://127.0.0.1:3425`�
 | `vcs.write` | 把生成结果写进提交信息框（`set_commit_message`）。插件不提交、不暂存、不 fetch、不 push。 |
 | `secrets` | API Key 存在系统钥匙串，由 IDE 在发请求时填入；插件代码读不到值。 |
 | `net:<host>`（可选） | 把 prompt、模型列表请求和连接测试发给你配置的 LLM 端点。每个预设服务商一个可选主机，只授你实际用的那个；`127.0.0.1`/`localhost` 给本地服务（Magpie、Ollama）。 |
-| `clipboard`（可选） | 复制 **Models** 中选中的模型 id。未授权时会在通知里显示该 id。 |
+| `clipboard`（可选） | 复制 **Models** 中选中的模型 id、**Restore Default** 的内置模板和 **Thinking Help** 的预设映射。未授权时会在通知里显示文本。 |
 
 不申请 `process:`、`fs:`、`ide.commands`，也没有遥测。
 
@@ -113,7 +127,7 @@ Magpie 示例：Provider 选 **Magpie**，Base URL 填 `http://127.0.0.1:3425`�
 
 Base URL 补全规则：无路径的 URL 补 `/v1`；已有路径的直接追加协议后缀（`/chat/completions`、`/responses`、`/messages`）；已带后缀的原样使用。
 
-Chat Completions 发送 `max_tokens`，Responses 发送 `max_output_tokens`，Anthropic 发送 `max_tokens`。模型返回 4xx 明确拒绝 `max_tokens`（要求改用 `max_completion_tokens`）或拒绝 `temperature` 时，插件只去掉该参数重试；其他失败（密钥错误、服务端错误）直接报告，不重试。最多三次尝试，共享 50 秒预算。
+Chat Completions 发送 `max_tokens`，Responses 发送 `max_output_tokens`，Anthropic 发送 `max_tokens`。模型返回 4xx 明确拒绝 `max_tokens`（要求改用 `max_completion_tokens`）或拒绝 `temperature` 时，插件只去掉该参数重试；其他失败（密钥错误、服务端错误）直接报告，不重试。最多三次尝试，共享 50 秒预算。校验后的思考片段会合并进同一个请求体；服务端明确拒绝思考字段时直接报告，不重试。
 
 ## 隐私
 
@@ -134,8 +148,9 @@ cargo build --release --target wasm32-wasip2
 
 - `src/config.rs` — 设置、服务商预设、命名档案解析与项目默认选择。
 - `src/git.rs` — 待提交内容上下文和 diff 裁剪。
-- `src/prompt.rs` — prompt 构建、JSON 解析、模板渲染（内置 Default 与命名模板）。
-- `src/llm.rs` — 三种协议客户端（`host::fetch`）、密钥槽、模型列表、兼容重试、请求诊断与连接测试。
+- `src/prompt.rs` — prompt 构建、JSON 解析、模板渲染（内置 Default 与命名模板）、预览示例字段。
+- `src/thinking.rs` — 思考等级、预设映射、校验、可用等级与 token budget。
+- `src/llm.rs` — 三种协议客户端（`host::fetch`）、密钥槽、模型列表、兼容重试、思考片段、请求诊断与连接测试。
 - `src/lib.rs` — 插件命令；`plugin.toml` — manifest、能力、贡献点。
 
 ## 许可证

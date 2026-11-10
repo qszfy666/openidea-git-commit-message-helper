@@ -17,7 +17,7 @@ openidea-plugin check .
 
 publisher=qszfy666
 key="$publisher.key"
-package="dist/$publisher.commit-message-helper-0.7.0"
+package="dist/$publisher.commit-message-helper-0.7.1"
 if [ -f "$key" ]; then
   openidea-plugin pack . --key "$key" --publisher "$publisher" --out "$package.oiplugin"
   shasum -a 256 "$package.oiplugin"

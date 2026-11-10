@@ -10,6 +10,7 @@
 //! parameter cannot push the command past that window.
 
 use crate::config::{Config, Protocol};
+use crate::thinking;
 use openidea_plugin::{Error, HttpRequest, host};
 use serde_json::{Value, json};
 use std::time::Instant;
@@ -189,6 +190,9 @@ pub struct Diagnostics {
     pub attempts: u32,
     /// Parameters a refusal made the plugin drop, in order.
     pub adjusted: Vec<&'static str>,
+    /// The thinking fragment sent, or why it was omitted. `None` when the
+    /// profile sends no thinking parameters at all.
+    pub thinking: Option<String>,
 }
 
 impl Diagnostics {
@@ -211,6 +215,9 @@ impl Diagnostics {
         if !self.adjusted.is_empty() {
             line.push_str(" · adjusted: ");
             line.push_str(&self.adjusted.join(", "));
+        }
+        if let Some(thinking) = &self.thinking {
+            line.push_str(&format!(" · thinking: {thinking}"));
         }
         format!("{}\n{line}", self.endpoint)
     }
@@ -249,6 +256,7 @@ fn request_body(
     system: &str,
     user: &str,
     max_tokens: u32,
+    thinking_fragment: Option<&Value>,
 ) -> String {
     let model = config.effective_model();
     let mut value = match config.protocol {
@@ -274,6 +282,13 @@ fn request_body(
         map.insert(shape.token.name().to_owned(), json!(max_tokens));
         if let Some(temperature) = shape.temperature {
             map.insert("temperature".to_owned(), json!(temperature));
+        }
+        // A validated fragment only adds fields; validate() keeps the
+        // plugin-owned request fields out of it.
+        if let Some(Value::Object(fragment)) = thinking_fragment {
+            for (key, field) in fragment {
+                map.insert(key.clone(), field.clone());
+            }
         }
     }
     value.to_string()
@@ -320,6 +335,9 @@ fn send(config: &Config, system: &str, user: &str, max_tokens: u32) -> Result<An
     let url = endpoint(config)?;
     let started = Instant::now();
     let mut shape = RequestShape::for_config(config);
+    // The budget is the profile's response limit, not the smaller probe used
+    // by the connection test.
+    let resolution = thinking::resolve(&config.thinking, config.protocol, config.max_tokens);
     let mut adjusted: Vec<&'static str> = Vec::new();
     let mut attempts = 0;
     let mut last_failure = String::new();
@@ -332,7 +350,14 @@ fn send(config: &Config, system: &str, user: &str, max_tokens: u32) -> Result<An
             )));
         }
         attempts += 1;
-        let body = request_body(config, shape, system, user, max_tokens);
+        let body = request_body(
+            config,
+            shape,
+            system,
+            user,
+            max_tokens,
+            resolution.fragment.as_ref(),
+        );
         let timeout = left.clamp(MIN_ATTEMPT_MS, ATTEMPT_MS) as u32;
         let request = build_request(config, &url, body, timeout);
         let response = host::fetch(&request)?;
@@ -348,6 +373,7 @@ fn send(config: &Config, system: &str, user: &str, max_tokens: u32) -> Result<An
                     temperature: shape.temperature,
                     attempts,
                     adjusted,
+                    thinking: resolution.note.clone(),
                 },
             });
         }
@@ -541,11 +567,12 @@ mod tests {
             extra_prompt: String::new(),
             secret_slot: "api-key".into(),
             template: None,
+            thinking: thinking::Settings::default(),
         }
     }
 
     fn body_of(config: &Config, shape: RequestShape) -> Value {
-        serde_json::from_str(&request_body(config, shape, "system", "user", 4096)).unwrap()
+        serde_json::from_str(&request_body(config, shape, "system", "user", 4096, None)).unwrap()
     }
 
     #[test]
@@ -737,12 +764,52 @@ mod tests {
             temperature: None,
             attempts: 2,
             adjusted: vec!["token parameter"],
+            thinking: None,
         };
         assert_eq!(
             diagnostics.summary(),
             "https://api.example.com/v1/chat/completions\n\
 max_completion_tokens 64000 · temperature omitted · 2 attempts · adjusted: token parameter"
         );
+    }
+
+    #[test]
+    fn diagnostics_show_the_thinking_fragment() {
+        let mut diagnostics = Diagnostics {
+            endpoint: "https://api.example.com/v1/chat/completions".into(),
+            token: TokenParameter::Tokens,
+            max_tokens: 4096,
+            temperature: Some(0.5),
+            attempts: 1,
+            adjusted: Vec::new(),
+            thinking: None,
+        };
+        diagnostics.thinking = Some("HIGH → {\"reasoning_effort\":\"high\"}".into());
+        assert!(
+            diagnostics.summary().contains("thinking: HIGH"),
+            "{}",
+            diagnostics.summary()
+        );
+    }
+
+    #[test]
+    fn a_validated_fragment_is_merged_into_the_request_body() {
+        let fragment = json!({"reasoning_effort": "high"});
+        let body: Value = serde_json::from_str(&request_body(
+            &config(Provider::OpenAi, Protocol::OpenAiChat, ""),
+            RequestShape {
+                token: TokenParameter::Tokens,
+                temperature: Some(0.5),
+            },
+            "system",
+            "user",
+            4096,
+            Some(&fragment),
+        ))
+        .unwrap();
+        assert_eq!(body["reasoning_effort"], "high");
+        assert_eq!(body["model"], "gpt-4o-mini");
+        assert_eq!(body["max_tokens"], 4096);
     }
 
     #[test]

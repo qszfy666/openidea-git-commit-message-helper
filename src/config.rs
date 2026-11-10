@@ -4,6 +4,7 @@
 //! the values through `host::setting*` (project value over global over the
 //! schema default).
 
+use crate::thinking;
 use openidea_plugin::host;
 use serde_json::Value;
 
@@ -319,6 +320,8 @@ pub struct Config {
     pub extra_prompt: String,
     /// The selected output template; `None` is the built-in Default.
     pub template: Option<String>,
+    /// Thinking level, parameter preset and optional custom mapping.
+    pub thinking: thinking::Settings,
 }
 
 impl Config {
@@ -382,6 +385,18 @@ impl Config {
             commit_types: commit_types(),
             extra_prompt,
             template,
+            thinking: thinking::Settings {
+                level: thinking::Level::parse(
+                    profile_text(model.as_ref(), "thinkingLevel").as_deref(),
+                ),
+                preset: thinking::Preset::parse(
+                    profile_text(model.as_ref(), "thinkingPreset").as_deref(),
+                ),
+                // A blank column means "use the preset template".
+                mapping: profile_text(model.as_ref(), "thinkingMapping")
+                    .map(|text| text.trim().to_owned())
+                    .filter(|text| !text.is_empty()),
+            },
         }
     }
 
@@ -547,6 +562,41 @@ mod tests {
         assert_eq!(Config::load().template.as_deref(), Some("{{subject}}"));
         host.set_setting("defaultTemplate", "\"Default\"");
         assert_eq!(Config::load().template, None);
+    }
+
+    #[test]
+    fn thinking_defaults_to_sending_nothing() {
+        let _host = MockHost::install();
+        assert_eq!(Config::load().thinking, thinking::Settings::default());
+    }
+
+    #[test]
+    fn the_active_profile_carries_its_thinking_settings() {
+        let host = MockHost::install();
+        host.set_setting("thinkingLevel", "\"LOW\"");
+        host.set_setting("thinkingPreset", "\"nested-effort\"");
+        host.set_setting("thinkingMapping", "\"  \"");
+        assert_eq!(Config::load().thinking.level, thinking::Level::Low);
+        assert_eq!(
+            Config::load().thinking.preset,
+            thinking::Preset::NestedEffort
+        );
+        assert_eq!(Config::load().thinking.mapping, None);
+
+        host.set_setting(
+            "modelProfiles",
+            r#"[{"name":"Reasoner","thinkingLevel":"HIGH","thinkingPreset":"custom","thinkingMapping":"{\"HIGH\":{\"reasoning_effort\":\"high\"}}"}]"#,
+        );
+        host.set_setting("activeModel", "\"Reasoner\"");
+        assert_eq!(Config::load().thinking.level, thinking::Level::High);
+        assert_eq!(Config::load().thinking.preset, thinking::Preset::Custom);
+        assert!(
+            Config::load()
+                .thinking
+                .mapping
+                .unwrap()
+                .contains("reasoning_effort")
+        );
     }
 
     #[test]

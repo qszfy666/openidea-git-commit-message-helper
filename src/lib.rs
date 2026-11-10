@@ -12,6 +12,7 @@ mod config;
 mod git;
 mod llm;
 mod prompt;
+mod thinking;
 mod ui;
 
 use config::{Config, UiLanguage};
@@ -175,6 +176,104 @@ impl CommitMessageHelper {
         ))
     }
 
+    /// Checklist 11: renders the template the user is editing. A declarative
+    /// settings table has no edit events for the plugin, so the action opens a
+    /// multiline editor pre-filled with the active template, and loops: edit,
+    /// confirm, see the rendered result. Example fields are picked once with
+    /// `pick_many` so conditional sections can be tried with values or empty.
+    fn preview_template(&mut self, strings: &ui::Strings) -> Result<Option<String>, Error> {
+        let config = Config::load();
+        let items: Vec<PickItem> = prompt::EXAMPLE_FIELDS
+            .iter()
+            .copied()
+            .map(|name| PickItem::new(name, name))
+            .collect();
+        let Some(selected) = host::pick_many(strings.preview_fields_prompt, &items)? else {
+            return Self::report(strings, Err(Error::Cancelled));
+        };
+        let fields = prompt::example_fields(&selected);
+        let mut template = config
+            .template
+            .unwrap_or_else(|| prompt::DEFAULT_TEMPLATE.to_owned());
+        while let Some(text) =
+            host::input_multiline(strings.preview_template_prompt, Some(&template))?
+        {
+            template = text;
+            match prompt::render_template(&fields, &template) {
+                Ok(rendered) => host::notify(
+                    NotificationLevel::Info,
+                    TITLE,
+                    &format!("{}\n\n{}", strings.preview_result, ui::clip(&rendered, 800)),
+                ),
+                Err(error) => host::notify(
+                    NotificationLevel::Error,
+                    TITLE,
+                    &format!("{}: {error}", strings.preview_error),
+                ),
+            }
+        }
+        Ok(None)
+    }
+
+    /// Checklist 12: the built-in template cannot be written into the settings
+    /// by a plugin, so the restore action copies it for pasting instead.
+    fn restore_default(&mut self, strings: &ui::Strings) -> Result<String, Error> {
+        let hint = if host::copy_to_clipboard(prompt::DEFAULT_TEMPLATE).is_ok() {
+            strings.copy_ok
+        } else {
+            strings.copy_failed
+        };
+        Ok(format!("{hint}\n\n{}", prompt::DEFAULT_TEMPLATE))
+    }
+
+    /// Checklist 27: declarative settings cannot filter an enum column, so
+    /// this page action shows the levels the current preset/mapping offers and
+    /// warns when the selected level is not among them.
+    fn thinking_levels(&mut self, strings: &ui::Strings) -> Result<String, Error> {
+        let config = Config::load();
+        let (levels, error) =
+            thinking::available_levels(&config.thinking, config.protocol, config.max_tokens);
+        let names = levels
+            .iter()
+            .map(|level| level.key())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut body = format!(
+            "{}: {}\n{}: {}\n{}: {names}",
+            strings.thinking_preset,
+            config.thinking.preset.key(),
+            strings.thinking_selected,
+            config.thinking.level.key(),
+            strings.thinking_available,
+        );
+        if !levels.contains(&config.thinking.level) {
+            body.push_str(&format!("\n{}", strings.thinking_unavailable));
+        }
+        if let Some(error) = error {
+            body.push_str(&format!("\n{}: {error}", strings.mapping_error));
+        }
+        Ok(body)
+    }
+
+    /// Checklist 26/12: mapping format, validation rules and the restore entry.
+    /// The preset template is copied so it can be pasted into the mapping
+    /// column; clearing that column restores it without any plugin write.
+    fn thinking_help(&mut self, strings: &ui::Strings) -> Result<String, Error> {
+        let config = Config::load();
+        let template = thinking::preset_template(config.thinking.preset, config.protocol);
+        let effective = thinking::mapping_text(&config.thinking, config.protocol);
+        let mut body = strings.thinking_help.to_owned();
+        if let Err(error) = thinking::validate(&effective) {
+            body.push_str(&format!("\n\n{}: {error}", strings.mapping_error));
+        }
+        let hint = if host::copy_to_clipboard(&template).is_ok() {
+            strings.copy_ok
+        } else {
+            strings.copy_failed
+        };
+        Ok(format!("{body}\n\n{hint}\n{}", ui::clip(&template, 1200)))
+    }
+
     /// Shows the outcome of a command that reports through notifications.
     fn report(
         strings: &ui::Strings,
@@ -286,6 +385,11 @@ impl Plugin for CommitMessageHelper {
             ),
             "models" => Self::report(strings, self.list_models(strings)),
             "endpoint" => Self::report(strings, self.show_endpoint(strings)),
+            "template-preview" => self.preview_template(strings),
+            "template-help" => Self::report(strings, Ok(strings.template_help.to_owned())),
+            "template-default" => Self::report(strings, self.restore_default(strings)),
+            "thinking-levels" => Self::report(strings, self.thinking_levels(strings)),
+            "thinking-help" => Self::report(strings, self.thinking_help(strings)),
             "test" => match self.test_connection() {
                 Ok((message, diagnostics)) => {
                     host::notify(
@@ -1260,5 +1364,224 @@ mod tests {
         let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(host.commit_draft().unwrap().message, "fix: fix crash");
+    }
+
+    /// Checklist 11: the Preview action renders the template the user is
+    /// editing, with example fields they can switch on and off.
+    #[test]
+    fn template_preview_renders_the_edited_template_with_chosen_fields() {
+        let host = MockHost::install();
+        host.set_setting(
+            "templates",
+            r#"[{"name":"Team","template":"{{header}} -- {{subject}}"}]"#,
+        );
+        host.set_setting("defaultTemplate", "\"Team\"");
+        // Which example fields have values, then the edited template, then
+        // dismiss the editor to leave the preview loop.
+        host.answer_next_prompt(Some(&["type", "subject", "body"]));
+        host.answer_next_prompt(Some(&[
+            "{{header}}{{#body}}\n\n{{body}}{{/body}}{{#closes}}\n\nCloses {{closes}}{{/closes}}\n\nfooter",
+        ]));
+        host.answer_next_prompt(None);
+
+        let result = CommitMessageHelper.run_command("template-preview", &host.invocation(), None);
+        assert!(result.is_ok(), "{result:?}");
+        let shown = host.notifications();
+        let notice = shown.last().expect("a preview is shown");
+        assert_eq!(notice.level, NotificationLevel::Info, "{notice:?}");
+        assert!(notice.body.contains("<type>: <subject>"), "{}", notice.body);
+        assert!(notice.body.contains("<body>"), "{}", notice.body);
+        assert!(notice.body.contains("footer"), "{}", notice.body);
+        assert!(
+            !notice.body.contains("Closes"),
+            "an unselected field leaves its conditional section out: {}",
+            notice.body
+        );
+    }
+
+    /// Checklist 12: a broken template is reported while previewing, before
+    /// any generation request falls back to Default.
+    #[test]
+    fn template_preview_reports_the_template_error() {
+        let host = MockHost::install();
+        host.answer_next_prompt(Some(&["type", "subject"]));
+        host.answer_next_prompt(Some(&["{{unknown}}"]));
+        host.answer_next_prompt(None);
+
+        let result = CommitMessageHelper.run_command("template-preview", &host.invocation(), None);
+        assert!(result.is_ok(), "{result:?}");
+        let shown = host.notifications();
+        let notice = shown.last().expect("the error is shown");
+        assert_eq!(notice.level, NotificationLevel::Error, "{notice:?}");
+        assert!(
+            notice.body.contains("unknown template variable"),
+            "{}",
+            notice.body
+        );
+    }
+
+    /// Checklist 12: variable help names every variable, the conditional
+    /// syntax, the errors and the restore entry.
+    #[test]
+    fn template_help_lists_variables_and_the_restore_entry() {
+        let host = MockHost::install();
+        let result = CommitMessageHelper.run_command("template-help", &host.invocation(), None);
+        assert!(result.is_ok(), "{result:?}");
+        let shown = host.notifications();
+        let notice = shown.last().expect("the help is shown");
+        assert_eq!(notice.level, NotificationLevel::Info, "{notice:?}");
+        for expected in [
+            "{{type}}",
+            "{{scope}}",
+            "{{subject}}",
+            "{{body}}",
+            "{{changes}}",
+            "{{closes}}",
+            "{{skipCi}}",
+            "{{header}}",
+            "{{#body}}",
+            "{{/body}}",
+            "Restore Default",
+        ] {
+            assert!(
+                notice.body.contains(expected),
+                "{expected}: {}",
+                notice.body
+            );
+        }
+    }
+
+    /// Checklist 27: the levels action reflects the mapping, not the full
+    /// enum in the settings table.
+    #[test]
+    fn thinking_levels_action_lists_what_the_mapping_offers() {
+        let host = MockHost::install();
+        host.set_setting(
+            "modelProfiles",
+            r#"[{"name":"Reasoner","thinkingLevel":"ENABLED","thinkingPreset":"custom","thinkingMapping":"{\"ENABLED\":{\"enable_thinking\":true}}"}]"#,
+        );
+        host.set_setting("activeModel", "\"Reasoner\"");
+        let result = CommitMessageHelper.run_command("thinking-levels", &host.invocation(), None);
+        assert!(result.is_ok(), "{result:?}");
+        let shown = host.notifications();
+        let notice = shown.last().expect("the levels are shown");
+        assert!(notice.body.contains("DEFAULT, ENABLED"), "{}", notice.body);
+        assert!(!notice.body.contains(", LOW"), "{}", notice.body);
+    }
+
+    #[test]
+    fn thinking_levels_action_warns_about_an_unavailable_level() {
+        let host = MockHost::install();
+        host.set_setting(
+            "modelProfiles",
+            r#"[{"name":"Reasoner","thinkingLevel":"LOW","thinkingPreset":"custom","thinkingMapping":"{\"ENABLED\":{\"enable_thinking\":true}}"}]"#,
+        );
+        host.set_setting("activeModel", "\"Reasoner\"");
+        let result = CommitMessageHelper.run_command("thinking-levels", &host.invocation(), None);
+        assert!(result.is_ok(), "{result:?}");
+        let shown = host.notifications();
+        let notice = shown.last().expect("the warning is shown");
+        assert!(notice.body.contains("Model default"), "{}", notice.body);
+    }
+
+    /// Checklist 26: help explains the mapping, validates the current one and
+    /// copies the preset template for restoring it.
+    #[test]
+    fn thinking_help_action_shows_the_template_and_the_mapping_error() {
+        let host = MockHost::install().with_capabilities(&["clipboard"]);
+        host.set_setting("thinkingPreset", "\"openai-effort\"");
+        host.set_setting("thinkingMapping", "\"[]\"");
+        let result = CommitMessageHelper.run_command("thinking-help", &host.invocation(), None);
+        assert!(result.is_ok(), "{result:?}");
+        assert!(
+            host.clipboard().unwrap().contains("reasoning_effort"),
+            "the preset template is copied: {:?}",
+            host.clipboard()
+        );
+        let shown = host.notifications();
+        let notice = shown.last().expect("the help is shown");
+        assert!(notice.body.contains("$thinking_budget"), "{}", notice.body);
+        assert!(notice.body.contains("Mapping error"), "{}", notice.body);
+    }
+
+    /// Checklist 24/25: the active profile's level and preset reach the body.
+    #[test]
+    fn generate_sends_the_profiles_thinking_fragment() {
+        let host = MockHost::install().with_capabilities(&[
+            "vcs.read",
+            "vcs.write",
+            "secrets",
+            "net:api.deepseek.com",
+        ]);
+        host.set_secret("api-key", "test-key");
+        host.set_setting(
+            "modelProfiles",
+            r#"[{"name":"Reasoner","thinkingLevel":"HIGH","thinkingPreset":"openai-effort"}]"#,
+        );
+        host.set_setting("activeModel", "\"Reasoner\"");
+        host.set_commit_draft(Some(draft_with_message("")));
+        host.on_fetch(|request| {
+            let body: serde_json::Value =
+                serde_json::from_slice(request.body.as_deref().unwrap()).unwrap();
+            assert_eq!(body["reasoning_effort"], "high", "{body}");
+            Ok(HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: br#"{"choices":[{"message":{"content":"{\"type\":\"fix\",\"subject\":\"fix crash\"}"}}]}"#.to_vec(),
+            })
+        });
+
+        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+        assert!(result.is_ok(), "{result:?}");
+        let shown = host.notifications();
+        let notice = shown.last().expect("the diagnostics are shown");
+        assert!(notice.body.contains("thinking: HIGH"), "{}", notice.body);
+    }
+
+    /// Checklist 27: a level the mapping does not define sends nothing.
+    #[test]
+    fn a_level_outside_the_mapping_sends_no_thinking_parameters() {
+        let host = MockHost::install().with_capabilities(&[
+            "vcs.read",
+            "vcs.write",
+            "secrets",
+            "net:api.deepseek.com",
+        ]);
+        host.set_secret("api-key", "test-key");
+        host.set_setting(
+            "modelProfiles",
+            r#"[{"name":"Reasoner","thinkingLevel":"LOW","thinkingPreset":"custom","thinkingMapping":"{\"ENABLED\":{\"enable_thinking\":true}}"}]"#,
+        );
+        host.set_setting("activeModel", "\"Reasoner\"");
+        host.set_commit_draft(Some(draft_with_message("")));
+        host.on_fetch(|request| {
+            let body: serde_json::Value =
+                serde_json::from_slice(request.body.as_deref().unwrap()).unwrap();
+            assert!(body.get("enable_thinking").is_none(), "{body}");
+            Ok(HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: br#"{"choices":[{"message":{"content":"{\"type\":\"fix\",\"subject\":\"fix crash\"}"}}]}"#.to_vec(),
+            })
+        });
+
+        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+        assert!(result.is_ok(), "{result:?}");
+        let shown = host.notifications();
+        let notice = shown.last().expect("the diagnostics are shown");
+        assert!(notice.body.contains("LOW"), "{}", notice.body);
+    }
+
+    /// Checklist 12: Restore Default hands the built-in template to the user,
+    /// because a plugin cannot write the declarative settings.
+    #[test]
+    fn restore_default_copies_the_built_in_template() {
+        let host = MockHost::install().with_capabilities(&["clipboard"]);
+        let result = CommitMessageHelper.run_command("template-default", &host.invocation(), None);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(host.clipboard().as_deref(), Some(prompt::DEFAULT_TEMPLATE));
+        let shown = host.notifications();
+        let notice = shown.last().expect("the template is shown");
+        assert!(notice.body.contains("{{header}}"), "{}", notice.body);
     }
 }

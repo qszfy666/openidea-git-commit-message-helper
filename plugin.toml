@@ -1,12 +1,12 @@
 id = "qszfy666.commit-message-helper"
 name = "Git Commit Message Helper"
-version = "0.7.0"
+version = "0.7.1"
 description = "Generate a Conventional Commits message for the changes selected in OpenIDEA's native Commit panel, with an LLM."
 authors = ["qszfy666"]
 license = "Apache-2.0"
 icon = "icons/icon.svg"
 icon-dark = "icons/icon_dark.svg"
-change-notes = "0.7.0 — configuration becomes reusable: named model profiles with their own token limit and key slot, named prompt profiles, named output templates with conditional sections, commit type descriptions, and a project-level default choice for each. Existing single settings keep working. Needs OpenIDEA 0.1.40 (plugin API 1.4)."
+change-notes = "0.7.1 — finishes the second migration batch: per-model thinking levels and request mappings with validation and budget checks, a live commit-template preview, template variable help and a restore entry. Existing settings keep sending no thinking parameters. Needs OpenIDEA 0.1.40 (plugin API 1.4)."
 categories = ["vcs", "ai"]
 engines.openidea = "^1.4"
 wasm = "dist/plugin.wasm"
@@ -75,6 +75,31 @@ id = "test"
 title = "Test LLM Connection"
 category = "Git Commit Message Helper"
 
+[[contributes.commands]]
+id = "template-preview"
+title = "Preview Commit Template"
+category = "Git Commit Message Helper"
+
+[[contributes.commands]]
+id = "template-help"
+title = "Commit Template Variables"
+category = "Git Commit Message Helper"
+
+[[contributes.commands]]
+id = "template-default"
+title = "Restore Default Commit Template"
+category = "Git Commit Message Helper"
+
+[[contributes.commands]]
+id = "thinking-levels"
+title = "Show Available Thinking Levels"
+category = "Git Commit Message Helper"
+
+[[contributes.commands]]
+id = "thinking-help"
+title = "Thinking Parameter Mapping Help"
+category = "Git Commit Message Helper"
+
 # The buttons above the message field of both the Commit tool window and the
 # Commit dialog.
 [[contributes.menus]]
@@ -117,6 +142,18 @@ id = "templates"
 title = "Commit Templates"
 schema = "settings/templates.json"
 
+[[contributes.settings.pages.actions]]
+title = "Preview"
+command = "template-preview"
+
+[[contributes.settings.pages.actions]]
+title = "Variables"
+command = "template-help"
+
+[[contributes.settings.pages.actions]]
+title = "Restore Default"
+command = "template-default"
+
 [[contributes.settings.pages]]
 id = "llm"
 title = "LLM Settings"
@@ -133,6 +170,14 @@ command = "models"
 [[contributes.settings.pages.actions]]
 title = "Request URL"
 command = "endpoint"
+
+[[contributes.settings.pages.actions]]
+title = "Thinking Levels"
+command = "thinking-levels"
+
+[[contributes.settings.pages.actions]]
+title = "Thinking Help"
+command = "thinking-help"
 
 # Four fixed key slots: model profiles pick one of them. Secrets must be
 # declared here, so a profile can only reference a slot listed in this manifest.

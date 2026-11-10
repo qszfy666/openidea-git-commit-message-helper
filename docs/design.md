@@ -26,11 +26,14 @@ OpenIDEA Commit 工具窗 / Commit 对话框
         │
         └─ WASM 插件（Rust SDK 1.4）
               ├─ git.rs    从 CommitDraft 构建 prompt 上下文，裁剪 diff，读取历史标题
-              ├─ prompt.rs 三种任务的 prompt + JSON 字段契约 + 模板渲染（内置 Default 与命名模板）
-              ├─ llm.rs    host::fetch → 三种协议、模型列表、兼容重试、请求诊断、密钥槽
-              ├─ config.rs 设置、服务商预设、命名档案解析与项目层选择
-              ├─ ui.rs     中英文通知与对话框文案
-              └─ lib.rs    命令入口：generate / generate-with-context / format / models / endpoint / test
+              ├─ prompt.rs   三种任务的 prompt + JSON 字段契约 + 模板渲染（内置 Default 与命名模板）
+              ├─ thinking.rs 思考等级、预设映射、校验、等级收敛与 token budget
+              ├─ llm.rs      host::fetch → 三种协议、模型列表、兼容重试、请求诊断、密钥槽
+              ├─ config.rs   设置、服务商预设、命名档案解析与项目层选择
+              ├─ ui.rs       中英文通知与对话框文案
+              └─ lib.rs      命令入口：generate / generate-with-context / format / models / endpoint /
+                           test / template-preview / template-help / template-default /
+                           thinking-levels / thinking-help
 ```
 
 ## 3. 数据采集
@@ -59,8 +62,8 @@ Base URL 留空时使用 provider 预设；有路径时直接追加协议后缀�
 
 - **Commit**：提交信息语言（`auto` 跟随 IDE 界面语言）、最大 diff 字符数、允许的提交类型（标题＋描述表格）；
 - **Prompts**：额外系统提示词、提示词档案表格与默认选择；
-- **Commit Templates**：输出模板档案表格与默认选择；
-- **LLM Settings**：Provider、协议、Base URL、Model、Temperature、**Send temperature**、Max response tokens、模型档案表格与活动档案选择；页面的 **Test**、**Models**、**Request URL** 三个动作都会先应用待保存设置。**Test** 发起一次最小请求并给出诊断摘要，**Models** 请求 `GET {base}/models` 后选择并把 id 复制到剪贴板（声明式设置对插件只读，用户自行粘贴到 Model），**Request URL** 显示按 Base URL 和协议拼接出的实际请求地址。
+- **Commit Templates**：输出模板档案表格与默认选择；**Preview**（编辑模板并切换示例字段查看渲染结果）、**Variables**（变量说明、示例与错误）、**Restore Default**（复制内置模板供粘贴）三个动作。
+- **LLM Settings**：Provider、协议、Base URL、Model、Temperature、**Send temperature**、Max response tokens、Thinking 组（等级、预设、自定义映射）、模型档案表格与活动档案选择；页面的 **Test**、**Models**、**Request URL**、**Thinking Levels**、**Thinking Help** 五个动作都会先应用待保存设置。**Test** 发起一次最小请求并给出诊断摘要，**Models** 请求 `GET {base}/models` 后选择并把 id 复制到剪贴板（声明式设置对插件只读，用户自行粘贴到 Model），**Request URL** 显示按 Base URL 和协议拼接出的实际请求地址。**Thinking Levels** 显示当前映射实际提供的等级，**Thinking Help** 显示映射规则、当前校验结果并复制预设模板。
 
 ### 4.2 命名档案与项目默认（0.7.0）
 
@@ -90,7 +93,17 @@ Base URL 留空时使用 provider 预设；有路径时直接追加协议后缀�
 | Responses | `max_output_tokens` | 不调整 |
 | Anthropic Messages | `max_tokens` | 不调整（Anthropic 本就接受该字段） |
 
-`temperature` 可以用 **Send temperature** 主动省略；任何协议下，4xx 明确拒绝温度时也会去掉后重试。只调整插件自己选择的参数：密钥错误、5xx 和其他失败直接报告，不重试；最多三次尝试。成功通知和 **Test** 结果都列出实际请求地址、token 字段及其值、温度、尝试次数和已做的调整。
+`temperature` 可以用 **Send temperature** 主动省略；任何协议下，4xx 明确拒绝温度时也会去掉后重试。只调整插件自己选择的参数：密钥错误、5xx 和其他失败直接报告，不重试；最多三次尝试。成功通知和 **Test** 结果都列出实际请求地址、token 字段及其值、温度、尝试次数、已做的调整，以及实际发送或省略的思考参数。
+
+### 4.3 思考参数（0.7.1）
+
+每个模型档案（或单份设置）有一组 Thinking 值：等级 `DEFAULT / DISABLED / ENABLED / LOW / MEDIUM / HIGH / MAX`、预设 `model-default / auto / openai-effort / nested-effort / thinking-object / enable-thinking / anthropic-budget / anthropic-adaptive / custom`，以及可选的自定义映射。`DEFAULT` 或 `model-default` 不发送任何思考参数，0.7.0 的请求形态保持不变。
+
+预设是一个按等级名作键的 JSON 对象，每个值是一段请求体片段，生成请求时合并到顶层字段。`auto` 按档案协议选标准参数（Chat Completions 用 `reasoning_effort`，Responses 用 `reasoning.effort`，Anthropic 用 `thinking` 对象加预算占位符）；其余预设对应 `reasoning_effort`、嵌套 effort、`thinking` 开关、`enable_thinking` 布尔值、Anthropic budget / adaptive 等参数族。`auto` 的 `MAX` 映射为 `high`，需要 `max` / `xhigh` 的网关写自定义映射。这里不做参考项目按供应商名猜测参数族的启发式：映射是请求片段，不是能力探测。
+
+`thinkingMapping` 列非空时覆盖预设模板，清空即恢复。进入处校验 JSON 对象、等级名、隐式 `DEFAULT`、空片段、null、保留请求字段（`model`、`messages`、`temperature`、各 token 字段等）、`$thinking_budget` 只能出现在 `thinking.budget_tokens`、嵌套不超过 12 层、大小不超过 64 KiB。`thinking.budget_tokens` 的占位符按等级占响应上限的 25/50/75/90%，预留 256 token 给答案；显式数字需不小于 1024 且小于上限，上限不足时该等级不可用。
+
+声明式表格的 enum 无法条件化，因此 **Thinking Levels** 动作显示映射实际提供的等级；插件在解析时收敛：等级没有映射、映射无效或 budget 不通过时按 Model default 发送，并在诊断里写明原因。请求诊断也显示实际发送的片段或未发送的原因。被服务端明确拒绝思考字段时直接报告失败，移除重试（第 38 项）和拒绝结果缓存（第 39 项）不在本批。
 
 ## 5. 输出格式
 
@@ -117,6 +130,8 @@ Closes #123
 
 0.7.0 起最终格式可由命名模板覆盖。变量为 `{{type}}`、`{{scope}}`、`{{subject}}`、`{{body}}`、`{{changes}}`、`{{closes}}`、`{{skipCi}}` 与 `{{header}}`（即 `type(scope): subject`）；条件段 `{{#field}}…{{/field}}` 只在该字段非空时输出，因此字段顺序、分隔符、可选段落和 footer 都由模板决定，静态文本原样保留。内置 `DEFAULT_TEMPLATE` 与旧的本地渲染等价，且不作为表格行存在，同名行无法覆盖它。模板解析遇到未知变量、嵌套段或未闭合段时返回错误，生成流程回退内置 Default 并在通知里说明，不会丢掉模型结果。完整 Velocity 兼容（清单第 46 项）单独评估。
 
+Commit Templates 页的 **Preview** 用 `pick_many` 选择哪些示例字段有值，再用多行输入框编辑模板：确认即渲染，可反复修改，取消结束；模板错误在预览里直接显示。**Variables** 给出变量、条件段、示例、错误类型和恢复入口，**Restore Default** 把内置模板复制到剪贴板（未授权剪贴板时在通知里显示）。宿主表格没有编辑事件，插件也不能写设置值，所以预览不是设置页内的随改随刷，恢复需要用户粘贴或清空 **Default template**。
+
 ## 6. 交互流程
 
 1. 用户打开 Commit 工具窗或 Commit 对话框，勾选本次要提交的文件/变更块。
@@ -136,13 +151,14 @@ Closes #123
 2. 单次命令受宿主 60 秒后台任务上限约束；插件把首次请求和兼容重试放进共享的 50 秒预算，单次请求超时随剩余时间递减且不低于 8 秒。无流式输出。
 3. `pending_commit` / `set_commit_message` 只适用于可信项目，且必须从某个窗口的 command/event 调用。
 4. 多仓库项目会在 `changes` 中返回多个仓库的文件；分支与最近提交来自当前项目对应的仓库状态。
-5. 插件设置是 IDE 声明的多页设置，不支持任意 Web 设置页或条件字段，插件也不能写入设置值：模型列表选择通过剪贴板转交用户；档案管理由声明式表格完成，表格列只支持标量、不支持嵌套集合。四个密钥槽是 manifest 静态声明的上限，档案数量不受此限，但只有四个可独立密钥。模板实时预览与思考映射等条件界面（清单 11、12、26、27）需要另用命令动作或插件视图适配。
-6. 诊断摘要目前列出 token 字段、温度、尝试次数和兼容调整；思考参数与兼容结果缓存属于清单第二／三批（24–28、39 项），尚未接入，因此摘要中不含这两项。
+5. 插件设置是 IDE 声明的多页设置，不支持任意 Web 设置页或条件字段，插件也不能写入设置值：模型列表选择通过剪贴板转交用户；档案管理由声明式表格完成，表格列只支持标量、不支持嵌套集合。四个密钥槽是 manifest 静态声明的上限，档案数量不受此限，但只有四个可独立密钥。模板预览与思考映射等条件界面（清单 11、12、26、27）改用设置页命令动作：预览是「编辑 → 确认 → 看结果」的循环而不是表格内的随改随刷，等级收敛由 **Thinking Levels** 动作显示而不是动态枚举。
+6. 诊断摘要列出 token 字段、温度、尝试次数、兼容调整，以及实际发送或省略的思考参数（24–28 项）；兼容结果缓存命中（39 项）仍未接入，摘要中不含缓存信息。
+7. 思考参数被服务端以 4xx 明确拒绝时直接报告失败，不做移除重试，也不缓存拒绝结果（38、39 项）；首次请求与既有兼容重试仍共享 50 秒预算，重试次数未改变。
 
 ## 8. 验证
 
-- `cargo test`：70 个单元测试（配置、命名档案与项目默认回退、CommitDraft 上下文、历史标题与受限项目降级、diff 裁剪、三种任务的 prompt、解析/模板渲染与错误回退、三种协议响应解析、密钥槽、模型列表、兼容重试、请求诊断、生成并写回提交信息）。
+- `cargo test`：93 个单元测试（配置、命名档案与项目默认回退、CommitDraft 上下文、历史标题与受限项目降级、diff 裁剪、三种任务的 prompt、解析/模板渲染与错误回退、模板预览/帮助/恢复、思考等级与预设模板、映射校验与等级收敛、token budget 解析与拒绝、三种协议响应解析、密钥槽、模型列表、兼容重试、请求诊断、生成并写回提交信息）。
 - `cargo fmt --all --check`、`cargo clippy --all-targets -- -D warnings`。
 - `cargo build --release --target wasm32-wasip2`。
 - `openidea-plugin check .`（用 OpenIDEA 0.1.40 构建的 CLI）：manifest、贡献点、能力、wasm 组件全部通过，组件被识别为插件 API 1.4。
-- 界面与真实端点的行为尚未实测：上述验证覆盖 SDK mock host 下的行为与包结构校验；在 OpenIDEA 0.1.40 + 本地 Magpie 或真实服务端点上的三个按钮、多行输入框与模型列表选择仍需人工验证。
+- 界面与真实端点的行为尚未实测：上述验证覆盖 SDK mock host 下的行为与包结构校验；在 OpenIDEA 0.1.40 + 本地 Magpie 或真实服务端点上的三个按钮、五个新页面动作、字段多选、多行输入框、模型列表选择，以及各思考预设片段是否被端点接受，仍需人工验证。

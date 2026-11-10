@@ -65,10 +65,34 @@
       "group": "Sampling",
       "default": 64000
     },
+    "thinkingLevel": {
+      "type": "string",
+      "title": "Thinking level",
+      "enum": ["DEFAULT", "DISABLED", "ENABLED", "LOW", "MEDIUM", "HIGH", "MAX"],
+      "description": "DEFAULT sends no thinking parameter. Only levels the selected preset or mapping offers are sent; run Thinking Levels to see them.",
+      "group": "Thinking",
+      "default": "DEFAULT"
+    },
+    "thinkingPreset": {
+      "type": "string",
+      "title": "Thinking preset",
+      "enum": ["model-default", "auto", "openai-effort", "nested-effort", "thinking-object", "enable-thinking", "anthropic-budget", "anthropic-adaptive", "custom"],
+      "description": "model-default sends nothing. auto follows the protocol; the others are request-fragment templates. A blank Thinking mapping uses the preset template.",
+      "group": "Thinking",
+      "default": "model-default"
+    },
+    "thinkingMapping": {
+      "type": "string",
+      "title": "Thinking mapping",
+      "multiline": true,
+      "description": "Optional JSON keyed by level, e.g. {\"HIGH\":{\"reasoning_effort\":\"high\"}}. Overrides the preset template; clear it to restore the preset. Run Thinking Help for the rules and the preset template.",
+      "group": "Thinking",
+      "default": ""
+    },
     "modelProfiles": {
       "type": "array",
       "title": "Model profiles",
-      "description": "Named connection settings. Add, rename, edit, copy and remove rows here. One profile is active at a time; a blank Active model keeps using the single settings above. Every profile has its own token limit and key slot. Keys are plugin secrets under Settings > Plugins > Secrets, never text in this table.",
+      "description": "Named connection settings. Add, rename, edit, copy and remove rows here. One profile is active at a time; a blank Active model keeps using the single settings above. Every profile has its own token limit, key slot and thinking settings. Keys are plugin secrets under Settings > Plugins > Secrets, never text in this table.",
       "group": "Profiles",
       "items": {
         "type": "object",
@@ -114,6 +138,27 @@
             "enum": ["api-key", "api-key-2", "api-key-3", "api-key-4"],
             "description": "Which declared plugin secret this profile sends. Fill each slot under Settings > Plugins > Secrets.",
             "default": "api-key"
+          },
+          "thinkingLevel": {
+            "type": "string",
+            "title": "Thinking level",
+            "enum": ["DEFAULT", "DISABLED", "ENABLED", "LOW", "MEDIUM", "HIGH", "MAX"],
+            "description": "DEFAULT sends nothing. Thinking Levels lists the levels this mapping really offers.",
+            "default": "DEFAULT"
+          },
+          "thinkingPreset": {
+            "type": "string",
+            "title": "Thinking preset",
+            "enum": ["model-default", "auto", "openai-effort", "nested-effort", "thinking-object", "enable-thinking", "anthropic-budget", "anthropic-adaptive", "custom"],
+            "description": "Request-fragment family. A blank Thinking mapping uses the preset template.",
+            "default": "model-default"
+          },
+          "thinkingMapping": {
+            "type": "string",
+            "title": "Thinking mapping",
+            "multiline": true,
+            "description": "Optional JSON keyed by level; overrides the preset template. Clear it to restore the preset.",
+            "default": ""
           }
         }
       },
