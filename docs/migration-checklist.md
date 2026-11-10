@@ -16,7 +16,7 @@
 
 基线依据见 [参考源码](https://github.com/AutismSuperman/git-commit-message-helper/tree/d71db758f23c3264272e5c5c39d1f2fdc43279b7)、[当前依赖](../Cargo.toml)、[当前 manifest](../plugin.toml) 和 [OpenIDEA 0.1.40 发布说明](https://github.com/l0ng-ai/openidea/releases/tag/v0.1.40)。
 
-状态标记（0.6.0 第一批、0.7.0 第二批子批次 1、0.7.1 第二批子批次 2、0.8.0 第三批与按需条目）：编号列的 `✅` 表示已完成，`◐` 表示部分完成，无标记即尚未开始；批次表的标记表示整批进度（第一批 ✅、第二批 ✅、第三批 ✅ 已完成本轮选定范围，部分条目与后续功能见实施记录）。逐项说明见文末各批「实施记录」。当前 47 项中 36 项完成、2 项部分完成（16、47）、9 项未开始（4、31、33、38、42–46）。基线表及未标记条目仍是 2026-11-10 的分析快照。
+状态标记（0.6.0 第一批、0.7.0 第二批子批次 1、0.7.1 第二批子批次 2、0.8.0 第三批与按需条目）：编号列的 `✅` 表示已完成，`◐` 表示部分完成，无标记即尚未开始；批次表的标记表示整批进度（第一批 ✅、第二批 ✅、第三批 ✅ 已完成本轮选定范围，部分条目与后续功能见实施记录）。逐项说明见文末各批「实施记录」。当前 47 项中 37 项完成、1 项部分完成（16）、9 项未开始（4、31、33、38、42–46）。基线表及未标记条目仍是 2026-11-10 的分析快照。
 
 当前已覆盖以下能力，后续功能可复用现有实现。
 
@@ -120,7 +120,7 @@
 | 44 | 原按钮切换为停止按钮 | 参考项目动态修改动作图标和状态，OpenIDEA 当前未暴露同等接口 | 先使用宿主任务取消 |
 | 45 | 生成期间锁定提交输入框 | 原作直接控制 IntelliJ 编辑器只读状态，OpenIDEA 未提供对应控制 | 当前采用 revision 写回保护 |
 | 46 | 完整 Velocity 模板兼容 | 包括条件、变量及 `$velocityTool` 字符串方法，需设计 Rust/WASM 兼容范围 | 单独评估 |
-| 47 ◐ | 日文、韩文及完整界面本地化 | 原作有中英日韩资源，当前通知为中英文，设置和命令文案需要补齐 | P2 |
+| 47 ✅ | 日文、韩文及完整界面本地化 | 原作有中英日韩资源，当前通知为中英文，设置和命令文案需要补齐 | P2 |
 
 参考实现见 [历史提交上下文](https://github.com/AutismSuperman/git-commit-message-helper/blob/d71db758f23c3264272e5c5c39d1f2fdc43279b7/src/main/java/com/fulinlin/service/GitContextService.java)、[提交面板控制](https://github.com/AutismSuperman/git-commit-message-helper/blob/d71db758f23c3264272e5c5c39d1f2fdc43279b7/src/main/java/com/fulinlin/action/CommitPanelActionSupport.java)、[Velocity 渲染](https://github.com/AutismSuperman/git-commit-message-helper/blob/d71db758f23c3264272e5c5c39d1f2fdc43279b7/src/main/java/com/fulinlin/utils/VelocityUtils.java) 和 [本地化资源](https://github.com/AutismSuperman/git-commit-message-helper/tree/d71db758f23c3264272e5c5c39d1f2fdc43279b7/src/main/resources/i18n)。平台约束见 [网络定义](https://github.com/l0ng-ai/openidea/blob/v0.1.40/sdk/rust/openidea-plugin/wit/io.wit)、[提交接口](https://github.com/l0ng-ai/openidea/blob/v0.1.40/sdk/rust/openidea-plugin/wit/commit.wit) 和 [提交工具栏实现](https://github.com/l0ng-ai/openidea/blob/v0.1.40/src/features/vcs/CommitView.tsx)。
 
@@ -283,3 +283,12 @@ pnpm build
 - 新增 5 项测试，其中 4 项先因目标缺陷失败，修复后通过；另 1 项确认文本输入不刷新。此前只计 Apply 刷新的旧断言同步改为精确验证类型选择与 Apply 各刷新一次。
 
 - 修复后的 127 个测试、fmt、Clippy、WASM 构建与 OpenIDEA 0.1.40 CLI 包检查通过。宿主真实 React 控件验证了下拉框更新及复选框勾选/取消；以当前 manifest 为输入的宿主条件检查确认隐藏按钮后 Find Action 和快捷键仍可用，共 2 项隔离检查通过。完整桌面进程和真实服务端点尚未实测。
+
+
+本地化补齐记录（47）。
+
+- 新增 `locales/zh-CN.json`，`ja.json`、`ko.json` 补齐设置项说明、分组名与密钥说明；三份词条各 116 条，覆盖 manifest 与设置 schema 中宿主会翻译的全部文本。插件名保持原文。
+- `tests/locales.rs` 从 `plugin.toml` 与 `settings/*.json` 收集显示文本，要求三份词条逐条覆盖；补词条前因缺少中文词条失败。
+- `ui::Strings` 的中文通知改用设置页译名（如「LLM 设置」的「模型」、「思考映射」、「恢复默认」），由测试对照 `zh-CN.json` 校验。
+- `llm.rs` 的 11 条错误改由 `ui::Strings` 按界面语言提供，英文原文不变；服务端消息与响应体原样附加。测试覆盖中文界面下的缺少密钥、HTTP 失败、空 Base URL 与无文本响应，并校验四种语言的占位符一致。
+- 第 47 项改为完成，整体统计调整为 37 项完成、1 项部分完成、9 项未开始。仍为英文的是 SDK 与宿主自身的错误（如未授权网络能力）以及后台任务标题。

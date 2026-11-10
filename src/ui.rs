@@ -57,13 +57,25 @@ pub struct Strings {
     pub editor_applied: &'static str,
     pub editor_invalid_header: &'static str,
     pub editor_no_subject: &'static str,
+    // LLM errors; `llm` fills in the `{name}` placeholders.
+    pub llm_no_key: &'static str,
+    pub llm_no_model: &'static str,
+    pub llm_no_base_url: &'static str,
+    pub llm_budget_spent: &'static str,
+    pub llm_request_failed: &'static str,
+    pub llm_test_not_json: &'static str,
+    pub llm_models_failed: &'static str,
+    pub llm_models_not_json: &'static str,
+    pub llm_models_empty: &'static str,
+    pub llm_not_json: &'static str,
+    pub llm_no_text: &'static str,
 }
 
 const ZH: Strings = Strings {
     no_repository: "当前窗口没有打开的 Git 仓库。",
     no_changes: "提交面板里没有勾选任何变更。",
     no_draft: "提交信息是空的，没有可格式化的内容。",
-    not_configured: "还没有配置 LLM API Key。请在 Settings › Plugins 的「已安装」里选中本插件，在右侧「密钥」中填入 LLM API key 并保存。",
+    not_configured: "还没有配置 LLM API 密钥。请在 设置 › 插件 › 已安装 里选中本插件，在右侧「密钥」中填入「LLM API 密钥」并保存。",
     collecting: "正在读取提交面板中的变更…",
     generating: "正在调用模型…",
     generating_now: "正在生成提交信息…",
@@ -75,8 +87,8 @@ const ZH: Strings = Strings {
     test_ok: "LLM 连接正常。",
     requirements_prompt: "本次提交的补充要求（业务背景、Bug 说明、issue、Skip CI 等；留空取消）",
     pick_model: "选择模型",
-    model_hint: "模型 ID 已复制到剪贴板，请粘贴到 LLM Settings 的 Model。",
-    model_copy_failed: "未能写入剪贴板，请手动把这个模型 ID 填到 LLM Settings 的 Model。",
+    model_hint: "模型 ID 已复制到剪贴板，请粘贴到「LLM 设置」的「模型」。",
+    model_copy_failed: "未能写入剪贴板，请手动把这个模型 ID 填到「LLM 设置」的「模型」。",
     request_url: "请求地址",
     key_slot: "密钥槽",
     template_fallback: "模板无效，已用内置 Default 渲染：",
@@ -84,15 +96,15 @@ const ZH: Strings = Strings {
     preview_template_prompt: "编辑模板后确认即可预览，可反复修改；取消对话框结束预览",
     preview_result: "模板预览",
     preview_error: "模板错误",
-    template_help: "输出模板变量：{{type}}、{{scope}}、{{subject}}、{{body}}、{{changes}}、{{closes}}、{{skipCi}}、{{header}}（即 type(scope): subject）。\n条件段：{{#body}}…{{/body}} 仅在字段非空时输出，以上任一变量都可作为段名。静态文本原样保留，因此最后一行可以是 footer。\n示例：{{header}}{{#body}}\n\n{{body}}{{/body}}{{#closes}}\n\nCloses {{closes}}{{/closes}}\n错误：未知变量、未闭合的 '{{'、段名不匹配、嵌套段或段未闭合。Preview 会显示错误；生成时会回退内置 Default 并在通知里说明。\n恢复：运行本页的 Restore Default 复制内置模板，或清空 Default template 选择。",
+    template_help: "输出模板变量：{{type}}、{{scope}}、{{subject}}、{{body}}、{{changes}}、{{closes}}、{{skipCi}}、{{header}}（即 type(scope): subject）。\n条件段：{{#body}}…{{/body}} 仅在字段非空时输出，以上任一变量都可作为段名。静态文本原样保留，因此最后一行可以是 footer。\n示例：{{header}}{{#body}}\n\n{{body}}{{/body}}{{#closes}}\n\nCloses {{closes}}{{/closes}}\n错误：未知变量、未闭合的 '{{'、段名不匹配、嵌套段或段未闭合。「预览」会显示错误；生成时会回退内置 Default 并在通知里说明。\n恢复：运行本页的「恢复默认」复制内置模板，或清空「默认模板」选择。",
     copy_ok: "已复制到剪贴板，请粘贴到设置中：",
     copy_failed: "未能写入剪贴板，请手动复制下面的文本：",
     thinking_preset: "思考预设",
     thinking_selected: "当前等级",
     thinking_available: "可用等级",
-    thinking_unavailable: "当前等级没有对应映射，请求将按 Model default 处理（不发送思考参数）。",
+    thinking_unavailable: "当前等级没有对应映射，请求将按模型默认处理（不发送思考参数）。",
     mapping_error: "映射错误",
-    thinking_help: "思考参数按模型档案配置。\n等级：DEFAULT（不发送）、DISABLED、ENABLED、LOW、MEDIUM、HIGH、MAX。预设：model-default、auto、openai-effort、nested-effort、thinking-object、enable-thinking、anthropic-budget、anthropic-adaptive、custom。\n映射：按等级名作键的 JSON 对象，每个值是非空的请求片段，例如 {\"HIGH\":{\"reasoning_effort\":\"high\"}}。$thinking_budget 只能出现在 thinking.budget_tokens，会按 Max response tokens 的一部分解析（不小于 1024 且小于上限）。保留字段（model、messages、system、temperature、max_tokens 等）、null 值、超过 12 层嵌套和超过 64 KiB 的映射都会被拒绝。\n恢复：清空 Thinking mapping 列即使用预设模板（下方已复制）；Thinking Levels 列出当前映射实际提供的等级。请求诊断会显示实际发送的内容。",
+    thinking_help: "思考参数按模型档案配置。\n等级：DEFAULT（不发送）、DISABLED、ENABLED、LOW、MEDIUM、HIGH、MAX。预设：model-default、auto、openai-effort、nested-effort、thinking-object、enable-thinking、anthropic-budget、anthropic-adaptive、custom。\n映射：按等级名作键的 JSON 对象，每个值是非空的请求片段，例如 {\"HIGH\":{\"reasoning_effort\":\"high\"}}。$thinking_budget 只能出现在 thinking.budget_tokens，会按「最大响应 token 数」的一部分解析（不小于 1024 且小于上限）。保留字段（model、messages、system、temperature、max_tokens 等）、null 值、超过 12 层嵌套和超过 64 KiB 的映射都会被拒绝。\n恢复：清空「思考映射」列即使用预设模板（下方已复制）；「思考等级」列出当前映射实际提供的等级。请求诊断会显示实际发送的内容。",
     quality_prefix: "质量提示",
     quality_vague: "标题只重复了动作（如「修改代码」），没有说出具体改了什么",
     quality_filename: "标题只是改动文件名",
@@ -112,6 +124,17 @@ const ZH: Strings = Strings {
     editor_applied: "已写入提交面板的提交信息框，请检查后提交。",
     editor_invalid_header: "提交类型必须来自允许列表；类型、范围和标题必须符合提交标题约束。未写入提交面板，表单草稿已保留。",
     editor_no_subject: "标题不能为空，没有写入提交面板。",
+    llm_no_key: "密钥槽 '{slot}' 中没有 API 密钥。请在 设置 › 插件 › 已安装 里选中 Git Commit Message Helper，在「密钥」中填入对应的「LLM API 密钥」。",
+    llm_no_model: "「模型」为空。请选择服务商预设，或在 设置 › 插件 › Git Commit Message Helper 中填写「模型」。",
+    llm_no_base_url: "「基础 URL」为空。请选择服务商预设，或在 设置 › 插件 › Git Commit Message Helper 中填写「基础 URL」。",
+    llm_budget_spent: "{failure}（已尝试 {attempts} 次，任务时间预算已用完，不再重试）",
+    llm_request_failed: "LLM 请求失败（HTTP {status}）：{detail}",
+    llm_test_not_json: "LLM 测试返回的不是 JSON：{error}：{body}",
+    llm_models_failed: "模型列表请求失败（HTTP {status}）：{detail}",
+    llm_models_not_json: "模型列表不是 JSON：{error}：{body}",
+    llm_models_empty: "该端点没有列出任何模型，请在设置中手动填写「模型」。",
+    llm_not_json: "LLM 返回的不是 JSON：{error}：{body}",
+    llm_no_text: "LLM 响应中没有任何文本：{body}",
 };
 
 const EN: Strings = Strings {
@@ -167,6 +190,17 @@ const EN: Strings = Strings {
     editor_applied: "Written into the Commit panel's message field; review it before committing.",
     editor_invalid_header: "The type must be allowed, and type, scope and subject must form a valid single-line header. Nothing was written; the editor draft is kept.",
     editor_no_subject: "The subject is empty, so nothing was written to the Commit panel.",
+    llm_no_key: "No API key in slot '{slot}'. In Settings › Plugins › Installed, select Git Commit Message Helper and fill in the matching LLM API key under Secrets.",
+    llm_no_model: "Model is empty. Pick a provider preset or fill in Model in Settings › Plugins › Git Commit Message Helper.",
+    llm_no_base_url: "Base URL is empty. Pick a provider preset or fill in Base URL in Settings › Plugins › Git Commit Message Helper.",
+    llm_budget_spent: "{failure} (stopped after {attempts} attempts: the task time budget is spent)",
+    llm_request_failed: "LLM request failed (HTTP {status}): {detail}",
+    llm_test_not_json: "LLM test returned non-JSON response: {error}: {body}",
+    llm_models_failed: "Model list request failed (HTTP {status}): {detail}",
+    llm_models_not_json: "The model list is not JSON: {error}: {body}",
+    llm_models_empty: "The endpoint listed no models. Fill in Model by hand in Settings.",
+    llm_not_json: "LLM returned non-JSON response: {error}: {body}",
+    llm_no_text: "LLM response did not contain any text: {body}",
 };
 
 const JA: Strings = Strings {
@@ -222,6 +256,17 @@ const JA: Strings = Strings {
     editor_applied: "コミット パネルのメッセージ欄に書き込みました。コミット前に確認してください。",
     editor_invalid_header: "種別は許可リストから選び、種別・スコープ・タイトルは有効な1行ヘッダーにしてください。書き込まず、フォームのドラフトを保持しました。",
     editor_no_subject: "タイトルが空のため、コミット パネルには何も書き込んでいません。",
+    llm_no_key: "キー スロット '{slot}' に API キーがありません。設定 › プラグイン › インストール済み で Git Commit Message Helper を選び、シークレットに対応する LLM API キーを入力してください。",
+    llm_no_model: "「モデル」が空です。プロバイダーのプリセットを選ぶか、設定 › プラグイン › Git Commit Message Helper で「モデル」を入力してください。",
+    llm_no_base_url: "「ベース URL」が空です。プロバイダーのプリセットを選ぶか、設定 › プラグイン › Git Commit Message Helper で「ベース URL」を入力してください。",
+    llm_budget_spent: "{failure}（{attempts} 回試行した後、タスクの時間予算を使い切ったため中止しました）",
+    llm_request_failed: "LLM リクエストに失敗しました（HTTP {status}）: {detail}",
+    llm_test_not_json: "LLM テストの応答が JSON ではありません: {error}: {body}",
+    llm_models_failed: "モデル一覧の取得に失敗しました（HTTP {status}）: {detail}",
+    llm_models_not_json: "モデル一覧が JSON ではありません: {error}: {body}",
+    llm_models_empty: "エンドポイントがモデルを 1 つも返しませんでした。設定で「モデル」を手動で入力してください。",
+    llm_not_json: "LLM の応答が JSON ではありません: {error}: {body}",
+    llm_no_text: "LLM の応答にテキストが含まれていません: {body}",
 };
 
 const KO: Strings = Strings {
@@ -277,6 +322,17 @@ const KO: Strings = Strings {
     editor_applied: "커밋 패널의 메시지 입력란에 썼습니다. 커밋하기 전에 확인하세요.",
     editor_invalid_header: "허용된 유형을 선택하고 유형, 범위, 제목이 유효한 한 줄 헤더를 이루도록 입력하세요. 커밋에 쓰지 않았으며 양식 초안은 유지됩니다.",
     editor_no_subject: "제목이 비어 있어 커밋 패널에 아무것도 쓰지 않았습니다.",
+    llm_no_key: "키 슬롯 '{slot}'에 API 키가 없습니다. 설정 › 플러그인 › 설치됨에서 Git Commit Message Helper를 선택하고 시크릿에 해당 LLM API 키를 입력하세요.",
+    llm_no_model: "'모델'이 비어 있습니다. 공급자 프리셋을 고르거나 설정 › 플러그인 › Git Commit Message Helper에서 '모델'을 입력하세요.",
+    llm_no_base_url: "'기본 URL'이 비어 있습니다. 공급자 프리셋을 고르거나 설정 › 플러그인 › Git Commit Message Helper에서 '기본 URL'을 입력하세요.",
+    llm_budget_spent: "{failure} ({attempts}번 시도한 뒤 작업 시간 예산을 모두 써서 중단했습니다)",
+    llm_request_failed: "LLM 요청 실패(HTTP {status}): {detail}",
+    llm_test_not_json: "LLM 테스트 응답이 JSON이 아닙니다: {error}: {body}",
+    llm_models_failed: "모델 목록 요청 실패(HTTP {status}): {detail}",
+    llm_models_not_json: "모델 목록이 JSON이 아닙니다: {error}: {body}",
+    llm_models_empty: "엔드포인트가 모델을 하나도 나열하지 않았습니다. 설정에서 '모델'을 직접 입력하세요.",
+    llm_not_json: "LLM 응답이 JSON이 아닙니다: {error}: {body}",
+    llm_no_text: "LLM 응답에 텍스트가 없습니다: {body}",
 };
 
 pub fn strings(language: UiLanguage) -> &'static Strings {
@@ -323,5 +379,75 @@ mod tests {
         assert_eq!(strings(UiLanguage::Ko).canceled, "취소했습니다.");
         assert_eq!(strings(UiLanguage::Ja).field_subject, "タイトル");
         assert_eq!(strings(UiLanguage::Ko).field_subject, "제목");
+    }
+
+    /// Chinese text names a setting, page, action or secret the way the
+    /// Chinese settings page shows it, from `locales/zh-CN.json`.
+    #[test]
+    fn chinese_text_names_settings_as_the_settings_page_shows_them() {
+        let catalog: std::collections::HashMap<String, String> =
+            serde_json::from_str(include_str!("../locales/zh-CN.json")).unwrap();
+        let zh = strings(UiLanguage::Zh);
+        let cases: [(&str, &[&str]); 5] = [
+            (zh.not_configured, &["LLM API key"]),
+            (zh.model_hint, &["LLM Settings", "Model"]),
+            (zh.model_copy_failed, &["LLM Settings", "Model"]),
+            (
+                zh.template_help,
+                &["Preview", "Restore Default", "Default template"],
+            ),
+            (
+                zh.thinking_help,
+                &["Max response tokens", "Thinking mapping", "Thinking Levels"],
+            ),
+        ];
+        for (text, labels) in cases {
+            for label in labels {
+                let shown = catalog[*label].as_str();
+                assert!(!text.contains(label), "{label:?} stays English in {text:?}");
+                assert!(text.contains(shown), "{text:?} does not say {shown:?}");
+            }
+        }
+        // The IDE's own path to the secrets, in the IDE's Chinese text.
+        assert!(
+            zh.not_configured.contains("设置 › 插件 › 已安装"),
+            "{}",
+            zh.not_configured
+        );
+        assert!(!zh.thinking_unavailable.contains("Model default"));
+    }
+
+    /// Every language fills in the same `{name}` placeholders of an LLM
+    /// error, so none drops the status, the server message or the body.
+    #[test]
+    fn llm_errors_keep_their_placeholders_in_every_language() {
+        fn placeholders(text: &str) -> Vec<&str> {
+            let mut found: Vec<&str> = text
+                .match_indices('{')
+                .filter_map(|(at, _)| text[at..].find('}').map(|end| &text[at..=at + end]))
+                .collect();
+            found.sort();
+            found
+        }
+        let fields: [fn(&Strings) -> &'static str; 11] = [
+            |s| s.llm_no_key,
+            |s| s.llm_no_model,
+            |s| s.llm_no_base_url,
+            |s| s.llm_budget_spent,
+            |s| s.llm_request_failed,
+            |s| s.llm_test_not_json,
+            |s| s.llm_models_failed,
+            |s| s.llm_models_not_json,
+            |s| s.llm_models_empty,
+            |s| s.llm_not_json,
+            |s| s.llm_no_text,
+        ];
+        for field in fields {
+            let english = placeholders(field(strings(UiLanguage::En)));
+            for language in [UiLanguage::Zh, UiLanguage::Ja, UiLanguage::Ko] {
+                let text = field(strings(language));
+                assert_eq!(placeholders(text), english, "{text}");
+            }
+        }
     }
 }

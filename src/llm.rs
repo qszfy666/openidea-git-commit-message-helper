@@ -9,8 +9,9 @@
 //! compatibility retries below share one budget, so a model that refuses a
 //! parameter cannot push the command past that window.
 
-use crate::config::{Config, Protocol};
+use crate::config::{Config, Protocol, UiLanguage};
 use crate::thinking;
+use crate::ui;
 use openidea_plugin::{Error, HttpRequest, host};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -27,22 +28,23 @@ const MAX_ATTEMPTS: u32 = 3;
 /// The connection test only needs a valid answer, not one worth reading.
 const TEST_TOKENS: u32 = 16;
 
+/// Error text in the IDE's UI language, read when the error is made.
+fn strings() -> &'static ui::Strings {
+    ui::strings(UiLanguage::load())
+}
+
 fn ensure_ready(config: &Config) -> Result<(), Error> {
     if !host::secret_is_set(&config.secret_slot) {
-        return Err(Error::Failed(format!(
-            "No API key in slot '{}'. In Settings › Plugins › Installed, select Git Commit Message Helper and fill in the matching LLM API key under Secrets.",
-            config.secret_slot
-        )));
+        return Err(Error::Failed(
+            strings().llm_no_key.replace("{slot}", &config.secret_slot),
+        ));
     }
     Ok(())
 }
 
 fn ensure_model(config: &Config) -> Result<(), Error> {
     if config.effective_model().is_empty() {
-        return Err(Error::Failed(
-            "Model is empty. Pick a provider preset or fill in Model in Settings › Plugins › Git Commit Message Helper."
-                .into(),
-        ));
+        return Err(Error::Failed(strings().llm_no_model.into()));
     }
     Ok(())
 }
@@ -65,10 +67,7 @@ fn endpoint_with(config: &Config, suffix: &str) -> Result<String, Error> {
 fn join_endpoint(base: &str, suffix: &str) -> Result<String, Error> {
     let base = base.trim().trim_end_matches('/');
     if base.is_empty() {
-        return Err(Error::Failed(
-            "Base URL is empty. Pick a provider preset or fill in Base URL in Settings › Plugins › Git Commit Message Helper."
-                .into(),
-        ));
+        return Err(Error::Failed(strings().llm_no_base_url.into()));
     }
     if base.ends_with(suffix) {
         return Ok(base.to_owned());
@@ -440,9 +439,12 @@ fn send(config: &Config, system: &str, user: &str, max_tokens: u32) -> Result<An
     loop {
         let left = BUDGET_MS.saturating_sub(started.elapsed().as_millis() as u64);
         if attempts > 0 && left < MIN_ATTEMPT_MS {
-            return Err(Error::Failed(format!(
-                "{last_failure} (stopped after {attempts} attempts: the task time budget is spent)"
-            )));
+            return Err(Error::Failed(
+                strings()
+                    .llm_budget_spent
+                    .replace("{attempts}", &attempts.to_string())
+                    .replace("{failure}", &last_failure),
+            ));
         }
         attempts += 1;
         let body = request_body(
@@ -475,11 +477,10 @@ fn send(config: &Config, system: &str, user: &str, max_tokens: u32) -> Result<An
             });
         }
 
-        let failure = format!(
-            "LLM request failed (HTTP {}): {}",
-            response.status,
-            error_message(&text)
-        );
+        let failure = strings()
+            .llm_request_failed
+            .replace("{status}", &response.status.to_string())
+            .replace("{detail}", &error_message(&text));
         match shape.after_rejection(config.protocol, response.status, &text) {
             Some((next, note)) if attempts < MAX_ATTEMPTS => {
                 shape = next;
@@ -523,10 +524,12 @@ pub fn test(config: &Config) -> Result<Answer, Error> {
     // answers `content: null` with `finish_reason: "length"`, which is a
     // working connection, not a failure.
     serde_json::from_str::<Value>(answer.text.trim()).map_err(|e| {
-        Error::Failed(format!(
-            "LLM test returned non-JSON response: {e}: {}",
-            clip(&answer.text, 400)
-        ))
+        Error::Failed(
+            strings()
+                .llm_test_not_json
+                .replace("{error}", &e.to_string())
+                .replace("{body}", &clip(&answer.text, 400)),
+        )
     })?;
     Ok(answer)
 }
@@ -543,17 +546,20 @@ pub fn models(config: &Config) -> Result<Vec<String>, Error> {
     let response = host::fetch(&request)?;
     let text = response.text();
     if !(200..300).contains(&response.status) {
-        return Err(Error::Failed(format!(
-            "Model list request failed (HTTP {}): {}",
-            response.status,
-            error_message(&text)
-        )));
+        return Err(Error::Failed(
+            strings()
+                .llm_models_failed
+                .replace("{status}", &response.status.to_string())
+                .replace("{detail}", &error_message(&text)),
+        ));
     }
     let value: Value = serde_json::from_str(text.trim()).map_err(|e| {
-        Error::Failed(format!(
-            "The model list is not JSON: {e}: {}",
-            clip(&text, 400)
-        ))
+        Error::Failed(
+            strings()
+                .llm_models_not_json
+                .replace("{error}", &e.to_string())
+                .replace("{body}", &clip(&text, 400)),
+        )
     })?;
     let mut ids: Vec<String> = value
         .get("data")
@@ -569,9 +575,7 @@ pub fn models(config: &Config) -> Result<Vec<String>, Error> {
         })
         .unwrap_or_default();
     if ids.is_empty() {
-        return Err(Error::Failed(
-            "The endpoint listed no models. Fill in Model by hand in Settings.".into(),
-        ));
+        return Err(Error::Failed(strings().llm_models_empty.into()));
     }
     ids.sort();
     ids.dedup();
@@ -625,10 +629,12 @@ fn value_text(value: &Value) -> Option<String> {
 
 pub fn extract_content(protocol: Protocol, body: &str) -> Result<String, Error> {
     let value: Value = serde_json::from_str(body.trim()).map_err(|e| {
-        Error::Failed(format!(
-            "LLM returned non-JSON response: {e}: {}",
-            clip(body, 400)
-        ))
+        Error::Failed(
+            strings()
+                .llm_not_json
+                .replace("{error}", &e.to_string())
+                .replace("{body}", &clip(body, 400)),
+        )
     })?;
     let text = match protocol {
         Protocol::OpenAiChat => value
@@ -646,10 +652,9 @@ pub fn extract_content(protocol: Protocol, body: &str) -> Result<String, Error> 
     };
     match text {
         Some(text) if !text.trim().is_empty() => Ok(text),
-        _ => Err(Error::Failed(format!(
-            "LLM response did not contain any text: {}",
-            clip(body, 400)
-        ))),
+        _ => Err(Error::Failed(
+            strings().llm_no_text.replace("{body}", &clip(body, 400)),
+        )),
     }
 }
 
@@ -1042,6 +1047,46 @@ max_completion_tokens 64000 · temperature omitted · 2 attempts · adjusted: to
             extract_content(Protocol::Anthropic, anthropic).unwrap(),
             "hello\nworld"
         );
+    }
+
+    #[test]
+    fn errors_follow_the_ide_language() {
+        let host =
+            MockHost::install().with_capabilities(&["secrets", "storage", "net:api.deepseek.com"]);
+        host.set_locale("zh-CN");
+        let deepseek = config(Provider::DeepSeek, Protocol::OpenAiChat, "");
+
+        let error = generate(&deepseek, "system", "user")
+            .err()
+            .expect("no key")
+            .to_string();
+        assert!(
+            error.starts_with("密钥槽 'api-key' 中没有 API 密钥。"),
+            "{error}"
+        );
+
+        host.set_secret("api-key", "test-key");
+        host.on_fetch(|_| {
+            Ok(HttpResponse {
+                status: 500,
+                headers: Vec::new(),
+                body: br#"{"error":{"message":"overloaded"}}"#.to_vec(),
+            })
+        });
+        let error = generate(&deepseek, "system", "user")
+            .err()
+            .expect("HTTP 500")
+            .to_string();
+        assert_eq!(error, "LLM 请求失败（HTTP 500）：overloaded");
+
+        let custom = config(Provider::Custom, Protocol::OpenAiChat, "");
+        let error = endpoint(&custom).unwrap_err().to_string();
+        assert!(error.starts_with("「基础 URL」为空。"), "{error}");
+
+        let error = extract_content(Protocol::OpenAiChat, "{}")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(error, "LLM 响应中没有任何文本：{}");
     }
 
     #[test]
