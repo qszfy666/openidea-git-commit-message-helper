@@ -1,17 +1,23 @@
 //! The changes the Commit panel would commit, as prompt context.
 //!
-//! OpenIDEA (plugin API 1.3) supplies the pending commit through
+//! OpenIDEA (plugin API 1.4) supplies the pending commit through
 //! `host::pending_commit()`: the included files and changed blocks only, with
 //! their unified diffs. The plugin no longer runs `git` itself, so it needs no
 //! `process:git` grant.
 
 use openidea_plugin::{CommitChange, CommitDraft, Project};
 
+/// How many subjects of the repository's own history the prompt reads as a
+/// style reference.
+const RECENT_SUBJECTS: u32 = 5;
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GitContext {
     pub root: String,
     pub branch: String,
     pub status_lines: Vec<String>,
+    /// Newest first, for the model to match the repository's own style.
+    pub recent_subjects: Vec<String>,
     pub diff: String,
 }
 
@@ -62,6 +68,18 @@ pub fn build_context(
         .and_then(|status| status.branch.clone())
         .unwrap_or_default();
     let status_lines = draft.changes.iter().map(change_label).collect();
+    // A missing log (no commit yet, an untrusted project) only costs the style
+    // reference; the generation itself does not depend on it.
+    let recent_subjects = project
+        .and_then(|project| project.vcs_log(None, RECENT_SUBJECTS).ok())
+        .map(|commits| {
+            commits
+                .into_iter()
+                .map(|commit| commit.subject.trim().to_owned())
+                .filter(|subject| !subject.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
 
     let mut diff = String::new();
     for change in &draft.changes {
@@ -84,6 +102,7 @@ pub fn build_context(
         root,
         branch,
         status_lines,
+        recent_subjects,
         diff: trim_diff(&diff, max_diff_chars),
     }
 }
@@ -176,6 +195,19 @@ mod tests {
     use openidea_plugin::RepositoryStatus;
     use openidea_plugin::mock::MockHost;
 
+    fn commit(subject: &str) -> openidea_plugin::CommitInfo {
+        openidea_plugin::CommitInfo {
+            id: format!("id-{subject}"),
+            short_id: "1234567".into(),
+            author: "Ann".into(),
+            author_email: "ann@example.com".into(),
+            date: 0,
+            subject: subject.into(),
+            body: String::new(),
+            parents: Vec::new(),
+        }
+    }
+
     #[test]
     fn builds_context_from_the_pending_commit() {
         let host = MockHost::install().with_capabilities(&["vcs.read"]);
@@ -184,6 +216,15 @@ mod tests {
             branch: Some("main".into()),
             ..RepositoryStatus::default()
         }));
+        host.set_vcs_reads(
+            vec![
+                commit("feat(parser): read the whole file"),
+                commit("docs: explain the flags"),
+            ],
+            "/repo/src/a.rs",
+            Vec::new(),
+            None,
+        );
         let draft = CommitDraft {
             revision: 7,
             message: "old message".into(),
@@ -203,8 +244,40 @@ mod tests {
         assert_eq!(context.root, "/repo");
         assert_eq!(context.branch, "main");
         assert_eq!(context.status_lines, vec!["[modified] src/a.rs"]);
+        assert_eq!(
+            context.recent_subjects,
+            vec![
+                "feat(parser): read the whole file",
+                "docs: explain the flags"
+            ]
+        );
         assert!(context.diff.contains("### src/a.rs"));
         assert!(context.diff.contains("+new"));
+    }
+
+    #[test]
+    fn a_restricted_project_still_builds_the_context_without_history() {
+        let host = MockHost::install().with_capabilities(&["vcs.read"]);
+        host.set_restricted(true);
+        host.set_vcs_reads(vec![commit("feat: hidden")], "/repo/a.rs", Vec::new(), None);
+        let draft = CommitDraft {
+            revision: 1,
+            message: String::new(),
+            amend: false,
+            changes: vec![CommitChange {
+                repository: "/repo".into(),
+                path: "/repo/a.rs".into(),
+                old_path: None,
+                status: "modified".into(),
+                diff: Some("@@ -1 +1 @@\n-a\n+b\n".into()),
+                truncated: false,
+            }],
+        };
+
+        let project = host.invocation().project().unwrap();
+        let context = build_context(Some(&project), &draft, 12_000);
+        assert!(context.recent_subjects.is_empty());
+        assert!(context.diff.contains("+b"), "the diff is still sent");
     }
 
     #[test]

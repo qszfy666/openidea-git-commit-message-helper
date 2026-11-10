@@ -30,6 +30,19 @@ pub struct CommitFields {
 
 const SYSTEM_PROMPT: &str = "You are a senior engineer and Git maintainer. Analyze the selected changes carefully, identify the primary intent, and fill the commit template fields. Keep your analysis internal and return only the requested JSON.";
 
+/// What the command asks the model to do with the diff and the author's own
+/// text.
+#[derive(Clone, Copy, Debug)]
+pub enum Task<'a> {
+    /// Write the fields from the selected changes alone.
+    Generate,
+    /// Write the fields, following requirements the author typed for this
+    /// commit (business background, a bug report, an issue, Skip CI).
+    Requirements(&'a str),
+    /// Rewrite the draft message already in the commit field into the fields.
+    Format(&'a str),
+}
+
 const ANALYSIS_INSTRUCTIONS: &str = "Internal Analysis Instructions (do not output this analysis):\n\
 1. Inspect the selected file status, the diff hunks and the tests.\n\
 2. Identify the primary user-visible or technical intent, not just the changed filenames.\n\
@@ -56,7 +69,7 @@ fn output_contract(config: &Config, language: &str) -> String {
     )
 }
 
-pub fn build_prompts(config: &Config, context: &GitContext) -> (String, String) {
+pub fn build_prompts(config: &Config, context: &GitContext, task: Task<'_>) -> (String, String) {
     let language = config.language.prompt_language();
     let mut system = SYSTEM_PROMPT.to_owned();
     if !config.extra_prompt.is_empty() {
@@ -65,6 +78,20 @@ pub fn build_prompts(config: &Config, context: &GitContext) -> (String, String) 
         system.push_str(
             "\n\nFollow these preferences when they do not conflict with the required JSON shape, the allowed types, the git diff, or the output constraints.",
         );
+    }
+
+    let preamble = match task {
+        Task::Generate => "Generate git commit fields for this project.",
+        Task::Requirements(_) => {
+            "Generate git commit fields for this project, including the author's additional requirements."
+        }
+        Task::Format(_) => {
+            "Rewrite the draft commit message below as git commit fields for this project."
+        }
+    };
+    let mut contract = output_contract(config, language);
+    if let Task::Format(_) = task {
+        contract.push_str("\n\nRewrite rules: keep every fact the draft states (the change, its scope, issue numbers, breaking changes); fix the type, the subject shape, the body bullets and the language. Use the diff only to correct the draft, not to add changes it does not describe.");
     }
 
     let status = if context.status_lines.is_empty() {
@@ -78,16 +105,35 @@ pub fn build_prompts(config: &Config, context: &GitContext) -> (String, String) 
         context.diff.as_str()
     };
 
-    let user = format!(
-        "Generate git commit fields for this project.\n\n{ANALYSIS_INSTRUCTIONS}\n\n{}\n\n\
-Repository Root:\n{}\n\nBranch:\n{}\n\nSelected Files Status:\n{}\n\nSelected Changes Diff:\n{}",
-        output_contract(config, language),
-        context.root,
-        context.branch,
-        status,
-        diff
-    );
-    (system, user)
+    let mut sections = vec![
+        preamble.to_owned(),
+        ANALYSIS_INSTRUCTIONS.to_owned(),
+        contract,
+    ];
+    match task {
+        Task::Generate => {}
+        Task::Requirements(requirements) => sections.push(format!(
+            "Author's Additional Requirements (written for this commit; follow them unless they contradict the diff or the JSON contract):\n{}",
+            requirements.trim()
+        )),
+        Task::Format(message) => sections.push(format!(
+            "Existing Draft Commit Message (preserve its meaning, details and language):\n{}",
+            message.trim()
+        )),
+    }
+    sections.push(format!("Repository Root:\n{}", context.root));
+    sections.push(format!("Branch:\n{}", context.branch));
+    sections.push(format!("Selected Files Status:\n{status}"));
+    if !context.recent_subjects.is_empty() {
+        // The scope sentence the checklist asks for: history is a style hint,
+        // the selected changes stay the source of the content.
+        sections.push(format!(
+            "Recent Commit Subjects (the repository's own style; match their language, tone and scope usage, never copy them):\n{}",
+            context.recent_subjects.join("\n")
+        ));
+    }
+    sections.push(format!("Selected Changes Diff:\n{diff}"));
+    (system, sections.join("\n\n"))
 }
 
 /// Removes reasoning wrappers (`<think…>`, `<thinking…>`) and Markdown code
@@ -330,6 +376,7 @@ mod tests {
             root: "/tmp/repo".into(),
             branch: "main".into(),
             status_lines: vec!["[M] src/a.rs".into()],
+            recent_subjects: vec!["fix: keep the retry".into()],
             diff: "diff --git a/src/a.rs b/src/a.rs\n@@ -1 +1 @@\n-old\n+new".into(),
         }
     }
@@ -380,11 +427,54 @@ mod tests {
         host.set_setting("language", "\"Chinese\"");
         host.set_setting("commitTypes", "\"feat,fix\"");
         let config = Config::load();
-        let (system, user) = build_prompts(&config, &sample_context());
+        let (system, user) = build_prompts(&config, &sample_context(), Task::Generate);
         assert!(system.contains("senior engineer"));
         assert!(user.contains("feat, fix"));
         assert!(user.contains("Simplified Chinese"));
         assert!(user.contains("Selected Changes Diff"));
+        assert!(
+            user.contains("Recent Commit Subjects") && user.contains("fix: keep the retry"),
+            "the repository's own style reaches the model: {user}"
+        );
+    }
+
+    #[test]
+    fn prompt_carries_the_authors_requirements() {
+        let _host = openidea_plugin::mock::MockHost::install();
+        let config = Config::load();
+        let (_, user) = build_prompts(
+            &config,
+            &sample_context(),
+            Task::Requirements("closes #42; the crash came from an empty queue"),
+        );
+        assert!(user.contains("closes #42; the crash came from an empty queue"));
+        assert!(user.contains("Additional Requirements"));
+        assert!(!user.contains("Existing Draft Commit Message"));
+    }
+
+    #[test]
+    fn prompt_asks_to_rewrite_an_existing_draft() {
+        let _host = openidea_plugin::mock::MockHost::install();
+        let config = Config::load();
+        let (_, user) = build_prompts(
+            &config,
+            &sample_context(),
+            Task::Format("fixed stuff and closes #7"),
+        );
+        assert!(user.contains("Existing Draft Commit Message"));
+        assert!(user.contains("fixed stuff and closes #7"));
+        assert!(user.contains("Rewrite rules"));
+        assert!(!user.contains("Additional Requirements"));
+    }
+
+    #[test]
+    fn prompt_leaves_the_style_section_out_without_history() {
+        let _host = openidea_plugin::mock::MockHost::install();
+        let config = Config::load();
+        let mut context = sample_context();
+        context.recent_subjects.clear();
+        let (_, user) = build_prompts(&config, &context, Task::Generate);
+        assert!(!user.contains("Recent Commit Subjects"));
     }
 
     #[test]

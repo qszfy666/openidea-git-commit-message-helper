@@ -52,6 +52,13 @@
       "group": "Sampling",
       "default": 0.5
     },
+    "sendTemperature": {
+      "type": "boolean",
+      "title": "Send temperature",
+      "description": "Turn off for models that reject the parameter. A request a model refuses because of temperature is retried without it either way.",
+      "group": "Sampling",
+      "default": true
+    },
     "maxTokens": {
       "type": "integer",
       "title": "Max response tokens",

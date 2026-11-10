@@ -206,6 +206,7 @@ pub struct Config {
     pub base_url: String,
     pub model: String,
     pub temperature: f64,
+    pub send_temperature: bool,
     pub max_tokens: u32,
     pub language: MessageLanguage,
     pub max_diff_chars: usize,
@@ -238,6 +239,7 @@ impl Config {
             temperature: host::setting_number("temperature")
                 .unwrap_or(0.5)
                 .clamp(0.0, 2.0),
+            send_temperature: host::setting_bool("sendTemperature").unwrap_or(true),
             max_tokens: host::setting_number("maxTokens")
                 .unwrap_or(64_000.0)
                 .clamp(256.0, 128_000.0) as u32,
@@ -298,13 +300,24 @@ mod tests {
         host.set_setting("model", "\"claude-sonnet-4-5\"");
         host.set_setting("temperature", "0.2");
         host.set_setting("maxTokens", "2048");
+        host.set_setting("sendTemperature", "false");
         host.set_setting("commitTypes", "\"feat, fix\"");
         let config = Config::load();
         assert_eq!(config.provider, Provider::Anthropic);
         assert_eq!(config.protocol, Protocol::Anthropic);
         assert_eq!(config.effective_base_url(), "https://api.anthropic.com");
         assert_eq!(config.max_tokens, 2048);
+        assert!(
+            !config.send_temperature,
+            "the model can omit temperature up front"
+        );
         assert_eq!(config.commit_types, vec!["feat", "fix"]);
+    }
+
+    #[test]
+    fn defaults_to_sending_temperature() {
+        let _host = MockHost::install();
+        assert!(Config::load().send_temperature);
     }
 
     #[test]

@@ -1,23 +1,25 @@
 id = "qszfy666.commit-message-helper"
 name = "Git Commit Message Helper"
-version = "0.5.3"
+version = "0.6.0"
 description = "Generate a Conventional Commits message for the changes selected in OpenIDEA's native Commit panel, with an LLM."
 authors = ["qszfy666"]
 license = "Apache-2.0"
 icon = "icons/icon.svg"
 icon-dark = "icons/icon_dark.svg"
-change-notes = "0.5.3 — the plugin icon moved from the repository root to `icons/`. The IDE shows the same glyph, and Paseo, whose project-icon search looks for a root `icon.svg`/`logo.svg`, no longer mistakes it for this repository's logo."
+change-notes = "0.6.0 — the commit message toolbar gains \"Generate with Requirements\" and \"Format Draft\"; the last commits of the repository are read as a style reference; a model that rejects `max_tokens` or `temperature` is retried without that parameter, and the result reports what was sent; the LLM Settings page lists the endpoint's models and previews the request URL. Needs OpenIDEA 0.1.40 (plugin API 1.4)."
 categories = ["vcs", "ai"]
-engines.openidea = "^1.3"
+engines.openidea = "^1.4"
 wasm = "dist/plugin.wasm"
 
 [capabilities]
 # The commit workflow: pending_commit reads the included changes and
-# set_commit_message writes the draft message. The API key is a plugin secret
+# set_commit_message writes the draft message; the API key is a plugin secret
 # and is filled in by the IDE when host::fetch sends a request.
 required = ["vcs.read", "vcs.write", "secrets"]
 # Grant only the endpoints you use. `127.0.0.1` covers Magpie and local
 # OpenAI-compatible servers; `localhost` covers Ollama-on-localhost.
+# `clipboard` is optional: the model list copies the chosen id so it can be
+# pasted into the Model setting, which the plugin cannot write itself.
 optional = [
   "net:api.openai.com",
   "net:api.anthropic.com",
@@ -35,6 +37,7 @@ optional = [
   "net:generativelanguage.googleapis.com",
   "net:127.0.0.1",
   "net:localhost",
+  "clipboard",
 ]
 
 [[contributes.commands]]
@@ -44,15 +47,47 @@ category = "Git Commit Message Helper"
 when = "vcsAvailable"
 
 [[contributes.commands]]
+id = "generate-with-context"
+title = "Generate Commit Message with Requirements"
+category = "Git Commit Message Helper"
+when = "vcsAvailable"
+icon = "icons/generate-with-context.svg"
+
+[[contributes.commands]]
+id = "format"
+title = "Format Commit Message"
+category = "Git Commit Message Helper"
+when = "vcsAvailable"
+icon = "icons/format.svg"
+
+[[contributes.commands]]
+id = "models"
+title = "List LLM Models"
+category = "Git Commit Message Helper"
+
+[[contributes.commands]]
+id = "endpoint"
+title = "Show LLM Request URL"
+category = "Git Commit Message Helper"
+
+[[contributes.commands]]
 id = "test"
 title = "Test LLM Connection"
 category = "Git Commit Message Helper"
 
-# The "Generate Commit Message" button above the message field of both the
-# Commit tool window and the Commit dialog.
+# The buttons above the message field of both the Commit tool window and the
+# Commit dialog.
 [[contributes.menus]]
 menu = "commit.message"
 command = "generate"
+
+[[contributes.menus]]
+menu = "commit.message"
+command = "generate-with-context"
+
+[[contributes.menus]]
+menu = "commit.message"
+command = "format"
 
 # Keep a Tools-menu entry for discoverability and for running it with a keymap.
 [[contributes.menus]]
@@ -85,6 +120,14 @@ schema = "settings/llm.json"
 [[contributes.settings.pages.actions]]
 title = "Test"
 command = "test"
+
+[[contributes.settings.pages.actions]]
+title = "Models"
+command = "models"
+
+[[contributes.settings.pages.actions]]
+title = "Request URL"
+command = "endpoint"
 
 [[contributes.secrets]]
 name = "api-key"

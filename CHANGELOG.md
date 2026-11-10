@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.0
+
+迁移清单第一批（1、2、21、22、30、36、37、40、41）。需要 OpenIDEA 0.1.40：SDK 升到 `v0.1.40`，manifest 改为 `engines.openidea = "^1.4"`，`openidea-plugin check .` 用 0.1.40 的 CLI 验证，组件被识别为插件 API 1.4。
+
+- **提交面板新增两个按钮**。**Generate Commit Message with Requirements** 用 `ui.input-multiline` 收集本次的业务背景、Bug 说明、issue 或 Skip CI 要求，只进入这一次的 prompt；取消或留空不发请求。**Format Commit Message** 把提交框里已有的草稿连同所选 diff 交给模型，要求保留事实、issue 号和语言并重写为规范字段；草稿为空时直接提示。两个命令各有自己的图标（API 1.4 的 `contributes.commands.icon`）。
+- **最近提交风格参考**：`Project::vcs_log(None, 5)` 读取最近五条标题写入 prompt，明确标注为风格提示；不使用 `vcs_diff()`，不读取历史正文或 diff。受限项目或读取失败时省略该段落，生成照常进行。
+- **模型列表与请求地址**：LLM Settings 页新增 **Models**（`GET {base}/models` → 选择 → 把 id 复制到剪贴板）和 **Request URL**（显示按 Base URL 和协议拼出的实际地址）。宿主的声明式设置对插件只读，所以模型 id 需要粘贴到 Model 字段；该字段始终可手动填写。新增可选 `clipboard` 能力，未授权时通知里直接显示 id。
+- **参数兼容与共享预算**：模型以 4xx 明确拒绝 `max_tokens` 并要求 `max_completion_tokens` 时改用后者；明确拒绝 `temperature` 时省略它。新增 **Send temperature** 设置，可一开始就省略。首次请求和最多两次重试共享 50 秒预算（宿主任务上限 60 秒），剩余不足 8 秒即停止；密钥错误、5xx 等不重试。请求超时不再固定 55 秒，随预算剩余递减。
+- **请求诊断**：成功通知和 **Test** 结果都列出实际请求地址、token 字段及其值、温度、尝试次数和已做的兼容调整。Test 失败仍由设置页在按钮旁内联显示。
+- `cargo test` 从 27 个增加到 51 个，覆盖三种 prompt、历史标题与降级、模型列表、两种兼容重试、配置省略温度、模型选择取消、地址预览、诊断摘要以及原有的协议/解析/写回保护回归。
+
+界面与真实端点的行为尚未实测：以上由 SDK mock host 的行为测试和 0.1.40 CLI 的包结构校验覆盖。
+
 ## 0.5.3
 
 - The plugin icon moved from the repository root to `icons/` (`icon = "icons/icon.svg"`, `icon-dark = "icons/icon_dark.svg"`), the layout OpenIDEA's own plugins use. The IDE still shows the same glyph in Settings › Plugins and on the Commit-panel button; nothing about the plugin changes. The move stops other tools from reading the icon as this repository's logo: Paseo derives a project's sidebar icon from a known filename set (`icon.svg`, `favicon.svg`, `logo.png`, …) in the project root and showed the sparkles instead of the first-letter placeholder.
