@@ -6,7 +6,7 @@ authors = ["qszfy666"]
 license = "Apache-2.0"
 icon = "icons/icon.svg"
 icon-dark = "icons/icon_dark.svg"
-change-notes = "0.8.0 — manual structured editor tool window and per-action button visibility; free-text commit language, field normalization, sentence bullets and a local quality check; per-project editor drafts; the compatibility cache now remembers what an endpoint refused; Japanese and Korean text. Needs OpenIDEA 0.1.40 (plugin API 1.4); new capabilities: storage, events."
+change-notes = "0.8.0 — manual structured editor dialog and per-action button visibility; free-text commit language, field normalization, sentence bullets and a local quality check; per-project editor drafts; the compatibility cache now remembers what an endpoint refused; Japanese and Korean text. Needs OpenIDEA 0.1.40 (plugin API 1.4); new capabilities: storage, events."
 categories = ["vcs", "ai"]
 engines.openidea = "^1.4"
 wasm = "dist/plugin.wasm"
@@ -48,29 +48,29 @@ id = "generate"
 title = "Generate Commit Message"
 category = "Git Commit Message Helper"
 when = "vcsAvailable"
-icon = "icons/generate.svg"
+icon = "diff-magic"
 
 [[contributes.commands]]
 id = "generate-with-context"
 title = "Generate Commit Message with Requirements"
 category = "Git Commit Message Helper"
 when = "vcsAvailable"
-icon = "icons/generate-with-context.svg"
+icon = "review-comment"
 
 [[contributes.commands]]
 id = "format"
 title = "Format Commit Message"
 category = "Git Commit Message Helper"
 when = "vcsAvailable"
-icon = "icons/format.svg"
+icon = "list"
 
-# Brings the manual structured editor (the view below) to the front: the
-# fourth button of the Commit panel.
+# Opens the structured editor: a list of the commit fields, each edited in
+# its own dialog (plugin API 1.4 has no multi-field dialog).
 [[contributes.commands]]
 id = "manual"
 title = "Edit Commit Message Fields"
 category = "Git Commit Message Helper"
-icon = "icons/manual.svg"
+icon = "edit"
 when = "vcsAvailable"
 
 [[contributes.commands]]
@@ -139,14 +139,6 @@ when = "vcsAvailable && plugin.qszfy666.commit-message-helper.actionManual"
 [[contributes.menus]]
 menu = "tools"
 command = "generate"
-
-# The manual structured editor (checklist 3): a form of the seven commit
-# fields. Applying renders them locally and writes into the Commit panel.
-[[contributes.views]]
-id = "commit-editor"
-title = "Commit Message Editor"
-icon = "icons/generate.svg"
-location = "right"
 
 [[contributes.keymaps]]
 command = "generate"

@@ -17,7 +17,6 @@ mod thinking;
 mod ui;
 
 use config::{Actions, Config, UiLanguage};
-use openidea_plugin::views::{View, ViewEvent, Viewport};
 use openidea_plugin::{
     Error, Invocation, NotificationLevel, PickItem, Plugin, host, register_plugin,
 };
@@ -451,8 +450,7 @@ impl Plugin for CommitMessageHelper {
             ),
             "models" => Self::report(strings, self.list_models(strings)),
             "manual" => {
-                // The editor is a tool window; this command is its button.
-                host::reveal_view(editor::VIEW_ID)?;
+                self.editor.show(&project_key(ctx), strings)?;
                 Ok(None)
             }
             "endpoint" => Self::report(strings, self.show_endpoint(strings)),
@@ -485,32 +483,12 @@ impl Plugin for CommitMessageHelper {
 /// in one repository never shows up in another.
 fn project_key(ctx: &Invocation) -> String {
     ctx.project()
-        .and_then(|project| project.root().ok())
+        .and_then(|project| project.vcs_status().ok().flatten())
+        .map(|status| status.root)
         .unwrap_or_default()
 }
 
-impl openidea_plugin::views::Views for CommitMessageHelper {
-    /// The manual structured editor: a form of the seven commit fields.
-    fn render(
-        &mut self,
-        _view: &str,
-        _viewport: Option<Viewport>,
-        _ctx: &Invocation,
-    ) -> Result<View, Error> {
-        let strings = ui::strings(UiLanguage::load());
-        Ok(self
-            .editor
-            .render(&project_key(_ctx), &Config::load(), strings))
-    }
-
-    fn handle(&mut self, _view: &str, event: ViewEvent, _ctx: &Invocation) -> Result<(), Error> {
-        let strings = ui::strings(UiLanguage::load());
-        self.editor
-            .handle(&project_key(_ctx), event, &Config::load(), strings)
-    }
-}
-
-register_plugin!(CommitMessageHelper, views);
+register_plugin!(CommitMessageHelper);
 
 #[cfg(test)]
 mod tests {
@@ -579,14 +557,6 @@ mod tests {
             Some(&openidea_plugin::ContextValue::Flag(true)),
             "the other buttons stay"
         );
-    }
-
-    #[test]
-    fn the_manual_command_reveals_the_editor_view() {
-        let host = MockHost::install().with_capabilities(&["vcs.read", "vcs.write"]);
-        let result = CommitMessageHelper::default().run_command("manual", &host.invocation(), None);
-        assert!(result.is_ok(), "{result:?}");
-        assert_eq!(host.revealed_views(), vec![editor::VIEW_ID.to_owned()]);
     }
 
     #[test]
@@ -1881,5 +1851,128 @@ mod tests {
         let shown = host.notifications();
         let notice = shown.last().expect("the template is shown");
         assert!(notice.body.contains("{{header}}"), "{}", notice.body);
+    }
+
+    /// Answers the manual editor's dialogs in order: a field list choice, a
+    /// typed text, or `None` for Cancel / Escape.
+    fn answer(host: &MockHost, answers: &[Option<&str>]) {
+        for answer in answers {
+            match answer {
+                Some(text) => host.answer_next_prompt(Some(&[*text])),
+                None => host.answer_next_prompt(None),
+            }
+        }
+    }
+
+    fn repository_host() -> MockHost {
+        let host = MockHost::install().with_capabilities(&["vcs.read", "vcs.write", "storage"]);
+        host.set_vcs_status(Some(openidea_plugin::RepositoryStatus {
+            root: "/repo".into(),
+            ..Default::default()
+        }));
+        host.set_commit_draft(Some(draft()));
+        host
+    }
+
+    #[test]
+    fn manual_edits_the_fields_one_at_a_time_and_writes_them() {
+        let host = repository_host();
+        answer(
+            &host,
+            &[
+                Some("type"),
+                Some("fix"),
+                Some("scope"),
+                Some("core"),
+                Some("subject"),
+                Some("preserve command arguments"),
+                Some("body"),
+                Some("--force is no longer required.\n-1 means unlimited"),
+                Some("skipCi"),
+                Some("marker:1"),
+                Some("apply"),
+            ],
+        );
+        CommitMessageHelper::default()
+            .run_command("manual", &host.invocation(), None)
+            .unwrap();
+        assert_eq!(
+            host.commit_draft().unwrap().message,
+            "fix(core): preserve command arguments\n\n- --force is no longer required.\n- -1 means unlimited\n\n[ci skip]"
+        );
+        assert!(!host.storage().contains_key("editor:/repo"));
+        assert!(host.revealed_views().is_empty(), "no tool window");
+    }
+
+    #[test]
+    fn closing_the_field_list_keeps_the_draft_for_next_time() {
+        let host = repository_host();
+        answer(&host, &[Some("subject"), Some("unfinished draft"), None]);
+        CommitMessageHelper::default()
+            .run_command("manual", &host.invocation(), None)
+            .unwrap();
+        assert_eq!(host.commit_draft().unwrap().message, "old message");
+        assert!(host.storage().contains_key("editor:/repo"));
+
+        answer(&host, &[Some("apply")]);
+        CommitMessageHelper::default()
+            .run_command("manual", &host.invocation(), None)
+            .unwrap();
+        assert_eq!(
+            host.commit_draft().unwrap().message,
+            "feat: unfinished draft"
+        );
+    }
+
+    #[test]
+    fn cancelling_one_field_keeps_its_previous_value() {
+        let host = repository_host();
+        answer(
+            &host,
+            &[
+                Some("subject"),
+                Some("first"),
+                Some("subject"),
+                None,
+                Some("apply"),
+            ],
+        );
+        CommitMessageHelper::default()
+            .run_command("manual", &host.invocation(), None)
+            .unwrap();
+        assert_eq!(host.commit_draft().unwrap().message, "feat: first");
+    }
+
+    #[test]
+    fn an_invalid_header_returns_to_the_field_list_with_its_values() {
+        let host = repository_host();
+        answer(
+            &host,
+            &[
+                Some("subject"),
+                Some("stop the crash"),
+                Some("scope"),
+                Some("core)"),
+                Some("apply"),
+                Some("scope"),
+                Some("core"),
+                Some("apply"),
+            ],
+        );
+        CommitMessageHelper::default()
+            .run_command("manual", &host.invocation(), None)
+            .unwrap();
+        assert!(
+            host.notifications()
+                .iter()
+                .any(|n| n.level == NotificationLevel::Warning
+                    && n.body.contains("single-line header")),
+            "the rejected header is reported"
+        );
+        assert_eq!(
+            host.commit_draft().unwrap().message,
+            "feat(core): stop the crash",
+            "the list came back with the subject kept"
+        );
     }
 }

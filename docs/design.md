@@ -9,7 +9,7 @@ OpenIDEA 0.1.40（`openidea:plugin@1.4.0`）已经提供原生提交工作流：
 - `host::set_commit_message(revision, text)`：把生成结果写入原生提交信息框，并按 `revision` 防止覆盖用户后来输入的内容；
 - `Project::vcs_log()`、`ui.input-multiline`、`ui.pick` 与 `clipboard`：最近提交风格参考、附加要求输入、模型列表选择和复制。
 
-因此插件不再需要自己的 Tool Window、文件勾选清单、剪贴板复制，也不再需要 `process:git`。插件从「工具窗 + 复制粘贴」改为「原生提交面板按钮 + 一键填入」；工具栏上的四个按钮分别对应生成、带附加要求生成、草稿格式化和手动编辑（打开结构化编辑器视图）；按钮各自可隐藏。
+因此插件不再需要自己的 Tool Window、文件勾选清单、剪贴板复制，也不再需要 `process:git`。插件从「工具窗 + 复制粘贴」改为「原生提交面板按钮 + 一键填入」；工具栏上的四个按钮分别对应生成、带附加要求生成、草稿格式化和手动编辑（打开字段列表弹框）；按钮各自可隐藏。
 
 ## 2. 架构
 
@@ -40,7 +40,7 @@ OpenIDEA Commit 工具窗 / Commit 对话框
 两条并行的入口：
 
 - **生成路径**：提交面板按钮 → prompt → `host::fetch` → 解析 → 本地渲染 → `set_commit_message`。
-- **手动路径**（清单 3）：`[[contributes.views]]` 工具窗表单 → 字段事件写入插件状态 → `Write to commit message` → 本地渲染 → `set_commit_message`，与生成共用同一 `revision` 保护。
+- **手动路径**（清单 3）：`host::pick` 字段列表 → 选中字段用各自的 `pick` / `input` / `input_multiline` 编辑并写入插件状态 → `Write to commit message` → 本地渲染 → `set_commit_message`，与生成共用同一 `revision` 保护。
 
 插件状态只有两处持久化，都用 `host::storage`（`storage` 能力，64 MiB 上限，卸载时删除）：按项目保存的编辑器草稿（键 `editor:<项目根>`）和按端点/模型/协议/思考映射/温度配置保存的兼容结果缓存（键 `compat:<hash>`）。宿主会在空闲 5 分钟后回收 WASM 实例，因此这两份状态不能只放在内存里。
 
@@ -156,7 +156,7 @@ Commit Templates 页的 **Preview** 用 `pick_many` 选择哪些示例字段有�
 
 如果生成期间用户修改了消息或勾选内容，`draft.revision` 已变化，`set_commit_message` 返回 `Error::Stale`，插件只提示「提交面板内容已变化」，不覆盖当前文本。
 
-手动编辑路径（清单 3）：提交信息上方的 **Edit Commit Message Fields** 按钮调用 `host::reveal_view("commit-editor")`，打开工具窗表单（type / scope / subject / body / breaking change / closes / Skip CI）。表单渲染由 `Commit` 设置页决定：六个显隐开关、类型排序（表格顺序或常用置顶）、Skip CI 标记表格与默认值。文本字段变化只更新插件状态并写入 `storage`，保留宿主输入状态；选择框和复选框变更后刷新视图以同步显示；`Write to commit message` 先按生成路径的同一标题约束校验，再读取 `pending_commit()` 的当前 `revision`，替换已有提交信息；读取后若草稿变化则拒绝写入，成功或清空后删除草稿。宿主表单的选择项只渲染下拉框，所以「单选列表 / 混合样式」不可用，类型样式部分只完成排序与数量。
+手动编辑路径（清单 3）：提交信息上方的 **Edit Commit Message Fields** 按钮用 `host::pick` 打开居中的字段列表弹框，每行是一个字段（type / scope / subject / body / breaking change / closes / Skip CI）及其当前值，末尾是 `Write to commit message` 和 `Clear all fields`。API 1.4 没有多字段弹框，所以选中字段后在各自的弹框里编辑：类型和 Skip CI 用列表选择（Skip CI 含「不写入标记」），scope、subject、closes 用单行输入，正文和破坏性变更用多行输入，确认后回到列表。列表内容由 `Commit` 设置页决定：六个显隐开关、类型排序（表格顺序或常用置顶）、Skip CI 标记表格与默认值。每次字段变更都写入 `storage`，按 Git 仓库根区分草稿；关闭列表（取消或 Esc）保留草稿，单个字段弹框取消则该字段不变。`Write to commit message` 先按生成路径的同一标题约束校验，再读取 `pending_commit()` 的当前 `revision`，替换已有提交信息；校验失败或读取后草稿变化则不写入，列表重新出现并以原因作为标题；成功或清空后删除草稿。类型只能从列表选择，所以「单选列表 / 混合样式」不可用，类型样式部分只完成排序与数量。
 
 提交信息上方的四个按钮（生成 / 带附加要求生成 / 格式化 / 手动编辑）各自有独立 `when`：`activation = ["on-startup-finished"]` 与 `settings-changed` 事件时，插件把 `Buttons` 设置写成 `plugin.<id>.<action*>` context key，`plugin.toml` 的菜单 `when` 读取同名键，命令自身仅要求仓库可用，因此按钮隐藏后仍可从 Find Action 和快捷键运行。启动即写是为了避免「按钮隐藏后插件永不激活」的死锁。
 
@@ -169,7 +169,7 @@ Commit Templates 页的 **Preview** 用 `pick_many` 选择哪些示例字段有�
 5. 插件设置是 IDE 声明的多页设置，不支持任意 Web 设置页或条件字段，插件也不能写入设置值：模型列表选择通过剪贴板转交用户；档案管理由声明式表格完成，表格列只支持标量、不支持嵌套集合。四个密钥槽是 manifest 静态声明的上限，档案数量不受此限，但只有四个可独立密钥。模板预览与思考映射等条件界面（清单 11、12、26、27）改用设置页命令动作：预览是「编辑 → 确认 → 看结果」的循环而不是表格内的随改随刷，等级收敛由 **Thinking Levels** 动作显示而不是动态枚举。
 6. 诊断摘要列出 token 字段、温度、尝试次数、兼容调整、缓存命中，以及实际发送或省略的思考参数（24–28、39、40 项）。
 7. 思考参数被服务端以 4xx 明确拒绝时直接报告失败，不做移除重试，也不缓存该拒绝（38 项仍未实现）；缓存只覆盖 token 字段与 temperature。首次请求与既有兼容重试仍共享 50 秒预算，重试次数未改变。
-8. 工具窗表单的控件由宿主决定：`FieldValue` 只有文本、多行、复选框与下拉，因此类型样式没有单选列表；表单在设置变化后不会自动重绘，需要重新打开视图或再次触发动作。
+8. 手动编辑器受 API 1.4 限制：没有多字段弹框，字段只能逐个编辑；单个字段弹框取消时宿主只返回空值，该字段在弹框里未确认的输入不会保留。
 9. 插件自身的通知与对话框文案按 `host::locale()` 选择（中、英、日、韩），声明式文本走 `locales/*.json` 目录；目录只覆盖标题类文案，设置项说明仍是英文，没有词条的文本由宿主回退原文。
 
 ## 8. 验证
