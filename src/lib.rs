@@ -9,7 +9,6 @@
 //! generation untouched.
 
 mod config;
-mod editor;
 mod git;
 mod llm;
 mod prompt;
@@ -17,14 +16,25 @@ mod thinking;
 mod ui;
 
 use config::{Actions, Config, UiLanguage};
-use openidea_plugin::{
-    Error, Invocation, NotificationLevel, PickItem, Plugin, host, register_plugin,
-};
+use openidea_plugin::{Error, Invocation, NotificationLevel, Plugin, host, register_plugin};
 use prompt::Task;
 
 const TITLE: &str = "Git Commit Message Helper";
 
-/// Writes the four button settings into the context keys `plugin.toml`'s `when`
+/// Shows a notification in the window of the invoking project. A settings
+/// page action runs in the settings window, which shows no plugin
+/// notifications (OpenIDEA 0.1.41), so the project's own window gets it;
+/// without a project it goes to the invoking window.
+fn notify(ctx: &Invocation, level: NotificationLevel, body: &str) {
+    if let Some(project) = ctx.project()
+        && project.notify(level, TITLE, body, &[]).is_ok()
+    {
+        return;
+    }
+    host::notify(level, TITLE, body);
+}
+
+/// Writes the two button settings into the context keys `plugin.toml`'s `when`
 /// clauses read (checklist 6). Called at activation and whenever a setting
 /// changes, so a hidden button is hidden before the first command runs too.
 fn sync_action_context() {
@@ -35,17 +45,12 @@ fn sync_action_context() {
 }
 
 #[derive(Default)]
-pub struct CommitMessageHelper {
-    /// The manual structured editor's form (checklist 3).
-    editor: editor::Editor,
-}
+pub struct CommitMessageHelper;
 
-/// What one run asks the model for. The draft is read once, inside
-/// `generate`, so `Format` sees the message it is about to replace.
+/// What one run asks the model for.
 enum Action {
     Generate,
     WithRequirements(String),
-    Format,
 }
 
 /// A generated message and the request that produced it.
@@ -108,10 +113,12 @@ impl CommitMessageHelper {
     fn generate(&mut self, ctx: &Invocation, action: Action) -> Result<Generated, Error> {
         let strings = ui::strings(UiLanguage::load());
         let config = Config::load();
-        if !host::secret_is_set(&config.secret_slot) {
+        if !host::secret_is_set(config::SECRET) {
             return Err(Error::Failed(format!(
                 "{} {}: {}",
-                strings.not_configured, strings.key_slot, config.secret_slot
+                strings.not_configured,
+                strings.key_slot,
+                config::SECRET
             )));
         }
         let task = host::begin_task(TITLE, true);
@@ -125,10 +132,6 @@ impl CommitMessageHelper {
         let asked = match &action {
             Action::Generate => Task::Generate,
             Action::WithRequirements(requirements) => Task::Requirements(requirements),
-            Action::Format if draft.message.trim().is_empty() => {
-                return Err(Error::Failed(strings.no_draft.to_owned()));
-            }
-            Action::Format => Task::Format(&draft.message),
         };
 
         // The message field is the only place the Commit panel can show that the
@@ -193,75 +196,6 @@ impl CommitMessageHelper {
         ))
     }
 
-    /// Lists the endpoint's models and copies the chosen id: settings are
-    /// read-only for a plugin, so the user pastes it into the Model field.
-    fn list_models(&mut self, strings: &ui::Strings) -> Result<String, Error> {
-        let config = Config::load();
-        let models = {
-            let task = host::begin_task("List LLM Models", true);
-            task.report(0, None, Some(strings.collecting));
-            llm::models(&config)?
-        };
-        let items: Vec<PickItem> = models.iter().map(|id| PickItem::new(id, id)).collect();
-        let Some(id) = host::pick(strings.pick_model, &items)? else {
-            return Err(Error::Cancelled);
-        };
-        let hint = if host::copy_to_clipboard(&id).is_ok() {
-            strings.model_hint
-        } else {
-            strings.model_copy_failed
-        };
-        Ok(format!("{id}\n\n{hint}"))
-    }
-
-    fn show_endpoint(&mut self, strings: &ui::Strings) -> Result<String, Error> {
-        let config = Config::load();
-        Ok(format!(
-            "{}\n{}",
-            strings.request_url,
-            llm::endpoint(&config)?
-        ))
-    }
-
-    /// Checklist 11: renders the template the user is editing. A declarative
-    /// settings table has no edit events for the plugin, so the action opens a
-    /// multiline editor pre-filled with the active template, and loops: edit,
-    /// confirm, see the rendered result. Example fields are picked once with
-    /// `pick_many` so conditional sections can be tried with values or empty.
-    fn preview_template(&mut self, strings: &ui::Strings) -> Result<Option<String>, Error> {
-        let config = Config::load();
-        let items: Vec<PickItem> = prompt::EXAMPLE_FIELDS
-            .iter()
-            .copied()
-            .map(|name| PickItem::new(name, name))
-            .collect();
-        let Some(selected) = host::pick_many(strings.preview_fields_prompt, &items)? else {
-            return Self::report(strings, Err(Error::Cancelled));
-        };
-        let fields = prompt::example_fields(&selected);
-        let mut template = config
-            .template
-            .unwrap_or_else(|| prompt::DEFAULT_TEMPLATE.to_owned());
-        while let Some(text) =
-            host::input_multiline(strings.preview_template_prompt, Some(&template))?
-        {
-            template = text;
-            match prompt::render_template(&fields, &template) {
-                Ok(rendered) => host::notify(
-                    NotificationLevel::Info,
-                    TITLE,
-                    &format!("{}\n\n{}", strings.preview_result, ui::clip(&rendered, 800)),
-                ),
-                Err(error) => host::notify(
-                    NotificationLevel::Error,
-                    TITLE,
-                    &format!("{}: {error}", strings.preview_error),
-                ),
-            }
-        }
-        Ok(None)
-    }
-
     /// Checklist 12: the built-in template cannot be written into the settings
     /// by a plugin, so the restore action copies it for pasting instead.
     fn restore_default(&mut self, strings: &ui::Strings) -> Result<String, Error> {
@@ -273,66 +207,19 @@ impl CommitMessageHelper {
         Ok(format!("{hint}\n\n{}", prompt::DEFAULT_TEMPLATE))
     }
 
-    /// Checklist 27: declarative settings cannot filter an enum column, so
-    /// this page action shows the levels the current preset/mapping offers and
-    /// warns when the selected level is not among them.
-    fn thinking_levels(&mut self, strings: &ui::Strings) -> Result<String, Error> {
-        let config = Config::load();
-        let (levels, error) =
-            thinking::available_levels(&config.thinking, config.protocol, config.max_tokens);
-        let names = levels
-            .iter()
-            .map(|level| level.key())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let mut body = format!(
-            "{}: {}\n{}: {}\n{}: {names}",
-            strings.thinking_preset,
-            config.thinking.preset.key(),
-            strings.thinking_selected,
-            config.thinking.level.key(),
-            strings.thinking_available,
-        );
-        if !levels.contains(&config.thinking.level) {
-            body.push_str(&format!("\n{}", strings.thinking_unavailable));
-        }
-        if let Some(error) = error {
-            body.push_str(&format!("\n{}: {error}", strings.mapping_error));
-        }
-        Ok(body)
-    }
-
-    /// Checklist 26/12: mapping format, validation rules and the restore entry.
-    /// The preset template is copied so it can be pasted into the mapping
-    /// column; clearing that column restores it without any plugin write.
-    fn thinking_help(&mut self, strings: &ui::Strings) -> Result<String, Error> {
-        let config = Config::load();
-        let template = thinking::preset_template(config.thinking.preset, config.protocol);
-        let effective = thinking::mapping_text(&config.thinking, config.protocol);
-        let mut body = strings.thinking_help.to_owned();
-        if let Err(error) = thinking::validate(&effective) {
-            body.push_str(&format!("\n\n{}: {error}", strings.mapping_error));
-        }
-        let hint = if host::copy_to_clipboard(&template).is_ok() {
-            strings.copy_ok
-        } else {
-            strings.copy_failed
-        };
-        Ok(format!("{body}\n\n{hint}\n{}", ui::clip(&template, 1200)))
-    }
-
     /// Shows the outcome of a command that reports through notifications.
     fn report(
+        ctx: &Invocation,
         strings: &ui::Strings,
         result: Result<String, Error>,
     ) -> Result<Option<String>, Error> {
         match result {
-            Ok(body) => host::notify(NotificationLevel::Info, TITLE, &body),
-            Err(Error::Cancelled) => host::notify(NotificationLevel::Info, TITLE, strings.canceled),
-            Err(Error::Stale) => host::notify(NotificationLevel::Warning, TITLE, strings.stale),
-            Err(error) => host::notify(
+            Ok(body) => notify(ctx, NotificationLevel::Info, &body),
+            Err(Error::Cancelled) => notify(ctx, NotificationLevel::Info, strings.canceled),
+            Err(Error::Stale) => notify(ctx, NotificationLevel::Warning, strings.stale),
+            Err(error) => notify(
+                ctx,
                 NotificationLevel::Error,
-                TITLE,
                 &format!("{}: {error}", strings.error_prefix),
             ),
         }
@@ -340,12 +227,15 @@ impl CommitMessageHelper {
     }
 }
 
-/// The text written into an empty message field while the model answers, so
-/// the Commit panel shows the command was taken; every path replaces or clears
-/// it again, and a newer revision (typing) is never overwritten.
+/// The text written into the message field while the model answers, so the
+/// Commit panel shows the command was taken. The result replaces it; a failed
+/// or cancelled run puts back what the field held before. A newer revision
+/// (typing during the run) is never overwritten.
 struct Progress {
     revision: u64,
     text: &'static str,
+    /// What the field held before the placeholder.
+    original: String,
     shown: bool,
 }
 
@@ -354,11 +244,9 @@ impl Progress {
         let mut progress = Self {
             revision: draft.revision,
             text: strings.generating_now,
+            original: draft.message.clone(),
             shown: false,
         };
-        if !draft.message.trim().is_empty() {
-            return progress;
-        }
         if host::set_commit_message(progress.revision, progress.text).is_err() {
             return progress;
         }
@@ -381,18 +269,19 @@ impl Progress {
         }
     }
 
-    /// Takes the placeholder back out, but only while the field still holds it.
+    /// Puts the earlier text back, but only while the field still holds the
+    /// placeholder.
     fn clear(&self) {
         if !self.shown {
             return;
         }
-        if host::set_commit_message(self.revision, "").is_ok() {
+        if host::set_commit_message(self.revision, &self.original).is_ok() {
             return;
         }
         if let Ok(Some(draft)) = host::pending_commit()
             && draft.message.trim() == self.text
         {
-            let _ = host::set_commit_message(draft.revision, "");
+            let _ = host::set_commit_message(draft.revision, &self.original);
         }
     }
 }
@@ -425,6 +314,7 @@ impl Plugin for CommitMessageHelper {
         let strings = ui::strings(UiLanguage::load());
         match id {
             "generate" => Self::report(
+                ctx,
                 strings,
                 self.generate(ctx, Action::Generate)
                     .map(|g| g.notification(strings)),
@@ -434,36 +324,23 @@ impl Plugin for CommitMessageHelper {
                 // author writes for this commit only.
                 let requirements = match host::input_multiline(strings.requirements_prompt, None) {
                     Ok(Some(text)) if !text.trim().is_empty() => text,
-                    Ok(_) => return Self::report(strings, Err(Error::Cancelled)),
-                    Err(error) => return Self::report(strings, Err(error)),
+                    Ok(_) => return Self::report(ctx, strings, Err(Error::Cancelled)),
+                    Err(error) => return Self::report(ctx, strings, Err(error)),
                 };
                 Self::report(
+                    ctx,
                     strings,
                     self.generate(ctx, Action::WithRequirements(requirements))
                         .map(|g| g.notification(strings)),
                 )
             }
-            "format" => Self::report(
-                strings,
-                self.generate(ctx, Action::Format)
-                    .map(|g| g.notification(strings)),
-            ),
-            "models" => Self::report(strings, self.list_models(strings)),
-            "manual" => {
-                self.editor.show(&project_key(ctx), strings)?;
-                Ok(None)
-            }
-            "endpoint" => Self::report(strings, self.show_endpoint(strings)),
-            "template-preview" => self.preview_template(strings),
-            "template-help" => Self::report(strings, Ok(strings.template_help.to_owned())),
-            "template-default" => Self::report(strings, self.restore_default(strings)),
-            "thinking-levels" => Self::report(strings, self.thinking_levels(strings)),
-            "thinking-help" => Self::report(strings, self.thinking_help(strings)),
+            "template-help" => Self::report(ctx, strings, Ok(strings.template_help.to_owned())),
+            "template-default" => Self::report(ctx, strings, self.restore_default(strings)),
             "test" => match self.test_connection() {
                 Ok((message, diagnostics)) => {
-                    host::notify(
+                    notify(
+                        ctx,
                         NotificationLevel::Info,
-                        TITLE,
                         &format!(
                             "{}\n{message}\n\n{}",
                             strings.test_ok,
@@ -479,15 +356,6 @@ impl Plugin for CommitMessageHelper {
     }
 }
 
-/// The key the editor keeps a draft under: one per project, so a draft typed
-/// in one repository never shows up in another.
-fn project_key(ctx: &Invocation) -> String {
-    ctx.project()
-        .and_then(|project| project.vcs_status().ok().flatten())
-        .map(|status| status.root)
-        .unwrap_or_default()
-}
-
 register_plugin!(CommitMessageHelper);
 
 #[cfg(test)]
@@ -495,6 +363,14 @@ mod tests {
     use super::*;
     use openidea_plugin::mock::MockHost;
     use openidea_plugin::{CommitChange, CommitDraft, HttpResponse};
+
+    /// The notifications the project's window got, oldest first.
+    fn shown_in_project(host: &MockHost) -> Vec<openidea_plugin::mock::Notification> {
+        host.project_notifications()
+            .into_iter()
+            .map(|(_, sent)| sent.notification)
+            .collect()
+    }
 
     fn draft() -> CommitDraft {
         CommitDraft {
@@ -513,19 +389,14 @@ mod tests {
     }
 
     #[test]
-    fn the_four_buttons_follow_their_settings() {
+    fn the_two_buttons_follow_their_settings() {
         let host = MockHost::install().with_capabilities(&["events"]);
-        let mut plugin = CommitMessageHelper::default();
+        let mut plugin = CommitMessageHelper;
         plugin
             .activate(&host.context("qszfy666.commit-message-helper"))
             .expect("activation subscribes to settings changes");
         let keys = host.context_keys();
-        for key in [
-            "actionGenerate",
-            "actionGenerateWithContext",
-            "actionFormat",
-            "actionManual",
-        ] {
+        for key in ["actionGenerate", "actionGenerateWithContext"] {
             assert_eq!(
                 keys.get(key),
                 Some(&openidea_plugin::ContextValue::Flag(true)),
@@ -533,30 +404,45 @@ mod tests {
             );
         }
 
-        host.set_setting("actionFormat", "false");
-        host.set_setting("actionManual", "false");
+        host.set_setting("actionGenerateWithContext", "false");
         plugin.handle_events(
             &[openidea_plugin::Event::Other {
                 kind: "settings-changed".into(),
-                data: r#"["actionFormat","actionManual"]"#.into(),
+                data: r#"["actionGenerateWithContext"]"#.into(),
             }],
             &host.invocation(),
         );
         let keys = host.context_keys();
         assert_eq!(
-            keys.get("actionFormat"),
+            keys.get("actionGenerateWithContext"),
             Some(&openidea_plugin::ContextValue::Flag(false)),
             "the setting reaches the context key the menu reads"
         );
         assert_eq!(
-            keys.get("actionManual"),
-            Some(&openidea_plugin::ContextValue::Flag(false))
-        );
-        assert_eq!(
             keys.get("actionGenerate"),
             Some(&openidea_plugin::ContextValue::Flag(true)),
-            "the other buttons stay"
+            "the other button stays"
         );
+    }
+
+    #[test]
+    fn removed_commands_are_unknown() {
+        let host = MockHost::install();
+        for id in [
+            "format",
+            "manual",
+            "models",
+            "endpoint",
+            "thinking-levels",
+            "thinking-help",
+            "template-preview",
+        ] {
+            let result = CommitMessageHelper.run_command(id, &host.invocation(), None);
+            assert!(
+                matches!(result, Err(Error::NotFound(_))),
+                "{id}: {result:?}"
+            );
+        }
     }
 
     #[test]
@@ -580,14 +466,14 @@ mod tests {
             })
         });
 
-        let mut plugin = CommitMessageHelper::default();
+        let mut plugin = CommitMessageHelper;
         let result = plugin.run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         let updated = host.commit_draft().expect("the draft is still there");
         assert_eq!(updated.message, "fix: fix crash");
         assert_eq!(
-            updated.revision, 8,
-            "setting the message moves the revision"
+            updated.revision, 9,
+            "the placeholder and the result each move the revision once"
         );
     }
 
@@ -617,7 +503,7 @@ mod tests {
     }
 
     #[test]
-    fn progress_keeps_a_typed_message_until_the_result_arrives() {
+    fn progress_replaces_a_filled_field_and_restores_it_when_cleared() {
         let host = MockHost::install().with_capabilities(&["vcs.read", "vcs.write"]);
         host.set_commit_draft(Some(draft_with_message("my own words")));
         let draft = host.commit_draft().expect("the draft is there");
@@ -625,10 +511,18 @@ mod tests {
         let progress = Progress::start(ui::strings(UiLanguage::En), &draft);
         assert_eq!(
             host.commit_draft().expect("still there").message,
+            "Generating commit message…",
+            "the placeholder shows the command runs, whatever the field held"
+        );
+        progress.clear();
+        assert_eq!(
+            host.commit_draft().expect("still there").message,
             "my own words",
-            "a filled field is never replaced by the placeholder"
+            "a failed run gives the earlier text back"
         );
 
+        let draft = host.commit_draft().expect("the draft is there");
+        let progress = Progress::start(ui::strings(UiLanguage::En), &draft);
         progress.finish("fix: crash").expect("the field takes it");
         assert_eq!(
             host.commit_draft().expect("still there").message,
@@ -681,7 +575,7 @@ mod tests {
             })
         });
 
-        let mut plugin = CommitMessageHelper::default();
+        let mut plugin = CommitMessageHelper;
         let result = plugin.run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(
@@ -704,7 +598,7 @@ mod tests {
         host.set_commit_draft(Some(draft_with_message("")));
         host.on_fetch(|_| Err(Error::Failed("network down".into())));
 
-        let mut plugin = CommitMessageHelper::default();
+        let mut plugin = CommitMessageHelper;
         let result = plugin.run_command("generate", &host.invocation(), None);
         assert!(
             result.is_ok(),
@@ -715,6 +609,28 @@ mod tests {
                 .expect("the draft is still there")
                 .message,
             ""
+        );
+    }
+
+    #[test]
+    fn a_failed_generation_gives_back_the_text_that_was_there() {
+        let host = MockHost::install().with_capabilities(&[
+            "vcs.read",
+            "vcs.write",
+            "secrets",
+            "net:api.deepseek.com",
+        ]);
+        host.set_secret("api-key", "test-key");
+        host.set_commit_draft(Some(draft_with_message("feat(math): earlier result")));
+        host.on_fetch(|_| Err(Error::Failed("network down".into())));
+
+        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(
+            host.commit_draft()
+                .expect("the draft is still there")
+                .message,
+            "feat(math): earlier result"
         );
     }
 
@@ -766,11 +682,7 @@ mod tests {
                     })
                 });
 
-                let result = CommitMessageHelper::default().run_command(
-                    "generate",
-                    &host.invocation(),
-                    None,
-                );
+                let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
                 assert!(result.is_ok(), "{raw}: {result:?}");
                 assert_eq!(
                     host.commit_draft()
@@ -780,7 +692,7 @@ mod tests {
                     "response: {raw}, initial message: {initial:?}"
                 );
                 assert_eq!(
-                    host.notifications().last().unwrap().level,
+                    shown_in_project(&host).last().unwrap().level,
                     if expected.is_some() {
                         NotificationLevel::Info
                     } else {
@@ -805,10 +717,10 @@ mod tests {
             })
         });
 
-        let mut plugin = CommitMessageHelper::default();
+        let mut plugin = CommitMessageHelper;
         let result = plugin.run_command("test", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
-        let shown = host.notifications();
+        let shown = shown_in_project(&host);
         let body = &shown.last().expect("the test reports").body;
         assert!(
             body.contains("HTTP 200 · deepseek-chat"),
@@ -820,6 +732,57 @@ mod tests {
                 && body.contains("1 attempt"),
             "the request that was sent is reported: {body}"
         );
+    }
+
+    /// A settings page action runs in the settings window, which shows no
+    /// plugin notifications: the result goes to the project's own window.
+    #[test]
+    fn the_test_result_reaches_the_project_window() {
+        let host = MockHost::install().with_capabilities(&["secrets", "net:api.deepseek.com"]);
+        host.set_project_root(Some("/repo"));
+        host.set_secret("api-key", "test-key");
+        host.on_fetch(|_| {
+            Ok(HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: br#"{"choices":[{"message":{"content":"OK"}}]}"#.to_vec(),
+            })
+        });
+
+        let result = CommitMessageHelper.run_command("test", &host.invocation(), None);
+        assert!(result.is_ok(), "{result:?}");
+        let sent = host.project_notifications();
+        let (root, notice) = sent.last().expect("the project window gets the result");
+        assert_eq!(root, "/repo");
+        assert!(
+            notice.notification.body.contains("HTTP 200"),
+            "{}",
+            notice.notification.body
+        );
+        assert!(
+            host.notifications().is_empty(),
+            "nothing goes to the invoking window"
+        );
+    }
+
+    #[test]
+    fn page_action_results_reach_the_project_window() {
+        let host = MockHost::install();
+        host.set_project_root(Some("/repo"));
+        let result = CommitMessageHelper.run_command("template-help", &host.invocation(), None);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(host.project_notifications().len(), 1);
+        assert!(host.notifications().is_empty());
+    }
+
+    #[test]
+    fn without_a_project_the_invoking_window_gets_the_result() {
+        let host = MockHost::install();
+        host.set_project_root(None);
+        let result = CommitMessageHelper.run_command("template-help", &host.invocation(), None);
+        assert!(result.is_ok(), "{result:?}");
+        assert!(host.project_notifications().is_empty());
+        assert_eq!(host.notifications().len(), 1);
     }
 
     /// The body of the request the mock receives, as text.
@@ -851,7 +814,7 @@ mod tests {
             })
         });
 
-        let mut plugin = CommitMessageHelper::default();
+        let mut plugin = CommitMessageHelper;
         let result = plugin.run_command("generate-with-context", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(
@@ -874,7 +837,7 @@ mod tests {
         host.set_commit_draft(Some(draft_with_message("my own words")));
         host.answer_next_prompt(None);
 
-        let mut plugin = CommitMessageHelper::default();
+        let mut plugin = CommitMessageHelper;
         let result = plugin.run_command("generate-with-context", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(
@@ -889,67 +852,8 @@ mod tests {
             "my own words"
         );
         assert_eq!(
-            host.notifications().last().expect("it reports").level,
+            shown_in_project(&host).last().expect("it reports").level,
             NotificationLevel::Info
-        );
-    }
-
-    #[test]
-    fn format_rewrites_the_draft_in_place() {
-        let host = MockHost::install().with_capabilities(&[
-            "vcs.read",
-            "vcs.write",
-            "secrets",
-            "net:api.deepseek.com",
-        ]);
-        host.set_secret("api-key", "test-key");
-        host.set_commit_draft(Some(draft_with_message("fixed stuff and closes #7")));
-        host.on_fetch(|request| {
-            let body = request_body(request);
-            assert!(
-                body.contains("fixed stuff and closes #7"),
-                "the draft being rewritten reaches the model: {body}"
-            );
-            assert!(body.contains("Existing Draft Commit Message"));
-            Ok(HttpResponse {
-                status: 200,
-                headers: Vec::new(),
-                body: serde_json::to_vec(&serde_json::json!({
-                    "choices": [{"message": {"content": "{\"type\":\"fix\",\"subject\":\"fix the empty queue\",\"closes\":\"#7\"}"}}]
-                }))
-                .unwrap(),
-            })
-        });
-
-        let mut plugin = CommitMessageHelper::default();
-        let result = plugin.run_command("format", &host.invocation(), None);
-        assert!(result.is_ok(), "{result:?}");
-        let updated = host.commit_draft().expect("the draft is still there");
-        assert_eq!(updated.message, "fix: fix the empty queue\n\nCloses #7");
-        assert_eq!(
-            updated.revision, 8,
-            "the draft is replaced once, never blanked first"
-        );
-    }
-
-    #[test]
-    fn format_needs_a_draft_to_rewrite() {
-        let host = MockHost::install().with_capabilities(&[
-            "vcs.read",
-            "vcs.write",
-            "secrets",
-            "net:api.deepseek.com",
-        ]);
-        host.set_secret("api-key", "test-key");
-        host.set_commit_draft(Some(draft_with_message("")));
-
-        let mut plugin = CommitMessageHelper::default();
-        let result = plugin.run_command("format", &host.invocation(), None);
-        assert!(result.is_ok(), "the command reports instead: {result:?}");
-        assert_eq!(host.requests().len(), 0, "an empty draft is not sent");
-        assert_eq!(
-            host.notifications().last().expect("it reports").level,
-            NotificationLevel::Error
         );
     }
 
@@ -974,7 +878,7 @@ mod tests {
             })
         });
 
-        let mut plugin = CommitMessageHelper::default();
+        let mut plugin = CommitMessageHelper;
         let result = plugin.run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(
@@ -984,7 +888,7 @@ mod tests {
             "fix: fix bug",
             "the quality check reports, it does not hold the message back"
         );
-        let shown = host.notifications();
+        let shown = shown_in_project(&host);
         let body = &shown.last().expect("it reports").body;
         assert!(
             body.contains("Quality check") && body.contains("shorter than 12 columns"),
@@ -1024,7 +928,7 @@ mod tests {
             })
         });
 
-        let mut plugin = CommitMessageHelper::default();
+        let mut plugin = CommitMessageHelper;
         let result = plugin.run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(host.requests().len(), 2, "one refusal, one retry");
@@ -1034,7 +938,7 @@ mod tests {
                 .message,
             "fix: stop the crash"
         );
-        let shown = host.notifications();
+        let shown = shown_in_project(&host);
         let body = &shown.last().expect("it reports").body;
         assert!(
             body.contains("max_completion_tokens") && body.contains("adjusted: token parameter"),
@@ -1068,11 +972,11 @@ mod tests {
             })
         });
 
-        let mut plugin = CommitMessageHelper::default();
+        let mut plugin = CommitMessageHelper;
         let result = plugin.run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(host.requests().len(), 2, "one refusal, one retry");
-        let shown = host.notifications();
+        let shown = shown_in_project(&host);
         let body = &shown.last().expect("it reports").body;
         assert!(
             body.contains("temperature omitted") && body.contains("adjusted: temperature"),
@@ -1103,11 +1007,11 @@ mod tests {
             })
         });
 
-        let mut plugin = CommitMessageHelper::default();
+        let mut plugin = CommitMessageHelper;
         let result = plugin.run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(host.requests().len(), 1, "no refusal, so no retry");
-        let shown = host.notifications();
+        let shown = shown_in_project(&host);
         let body = &shown.last().expect("it reports").body;
         assert!(body.contains("temperature omitted"), "{body}");
         assert!(!body.contains("adjusted:"), "{body}");
@@ -1131,7 +1035,7 @@ mod tests {
             })
         });
 
-        let mut plugin = CommitMessageHelper::default();
+        let mut plugin = CommitMessageHelper;
         let result = plugin.run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "the command reports instead: {result:?}");
         assert_eq!(
@@ -1139,76 +1043,9 @@ mod tests {
             1,
             "an auth failure has nothing to adjust"
         );
-        let shown = host.notifications();
+        let shown = shown_in_project(&host);
         let body = &shown.last().expect("it reports").body;
         assert!(body.contains("bad key"), "{body}");
-    }
-
-    fn models_host() -> MockHost {
-        let host = MockHost::install().with_capabilities(&[
-            "secrets",
-            "clipboard",
-            "net:api.deepseek.com",
-        ]);
-        host.set_secret("api-key", "test-key");
-        host.on_fetch(|request| {
-            assert_eq!(request.method, "GET");
-            assert!(request.url.ends_with("/v1/models"), "{}", request.url);
-            Ok(HttpResponse {
-                status: 200,
-                headers: Vec::new(),
-                body: br#"{"data":[{"id":"deepseek-reasoner"},{"id":"deepseek-chat"}]}"#.to_vec(),
-            })
-        });
-        host
-    }
-
-    #[test]
-    fn the_models_command_copies_the_chosen_id_for_the_model_setting() {
-        let host = models_host();
-        host.answer_next_prompt(Some(&["deepseek-reasoner"]));
-
-        let mut plugin = CommitMessageHelper::default();
-        let result = plugin.run_command("models", &host.invocation(), None);
-        assert!(result.is_ok(), "{result:?}");
-        assert_eq!(
-            host.clipboard().as_deref(),
-            Some("deepseek-reasoner"),
-            "settings are read-only for a plugin, so the id is copied"
-        );
-        let shown = host.notifications();
-        let body = &shown.last().expect("it reports").body;
-        assert!(body.contains("deepseek-reasoner"), "{body}");
-    }
-
-    #[test]
-    fn a_dismissed_model_picker_changes_nothing() {
-        let host = models_host();
-        host.answer_next_prompt(None);
-
-        let mut plugin = CommitMessageHelper::default();
-        let result = plugin.run_command("models", &host.invocation(), None);
-        assert!(result.is_ok(), "{result:?}");
-        assert_eq!(host.clipboard(), None);
-        assert_eq!(
-            host.notifications().last().expect("it reports").level,
-            NotificationLevel::Info
-        );
-    }
-
-    #[test]
-    fn the_endpoint_command_shows_the_url_the_request_goes_to() {
-        let host = MockHost::install().with_capabilities(&[]);
-
-        let mut plugin = CommitMessageHelper::default();
-        let result = plugin.run_command("endpoint", &host.invocation(), None);
-        assert!(result.is_ok(), "{result:?}");
-        let shown = host.notifications();
-        let body = &shown.last().expect("it reports").body;
-        assert!(
-            body.contains("https://api.deepseek.com/v1/chat/completions"),
-            "the effective URL is shown: {body}"
-        );
     }
 
     #[test]
@@ -1240,10 +1077,10 @@ mod tests {
             })
         });
 
-        let result = CommitMessageHelper::default().run_command("test", &host.invocation(), None);
+        let result = CommitMessageHelper.run_command("test", &host.invocation(), None);
         assert!(result.is_ok(), "the connection works: {result:?}");
         assert_eq!(
-            host.notifications().last().unwrap().level,
+            shown_in_project(&host).last().unwrap().level,
             NotificationLevel::Info
         );
     }
@@ -1260,14 +1097,13 @@ mod tests {
             })
         });
 
-        let result = CommitMessageHelper::default().run_command("test", &host.invocation(), None);
+        let result = CommitMessageHelper.run_command("test", &host.invocation(), None);
         assert!(result.is_err(), "a non-JSON answer is not a passing test");
     }
 
-    /// A model profile owns the endpoint, model, sampling, token limit and key
-    /// slot; the single LLM settings above it are only the fallback.
+    /// The LLM settings own the endpoint, model, sampling and token limit.
     #[test]
-    fn the_active_model_profile_drives_the_request() {
+    fn the_llm_settings_drive_the_request() {
         let host = MockHost::install().with_capabilities(&[
             "vcs.read",
             "vcs.write",
@@ -1275,32 +1111,32 @@ mod tests {
             "net:api.deepseek.com",
             "net:llm.example.com",
         ]);
-        host.set_secret("api-key", "the-default-key");
-        host.set_secret("api-key-2", "the-second-key");
-        host.set_setting(
-            "modelProfiles",
-            r#"[{"name":"Work","provider":"Custom","protocol":"openai-chat","baseUrl":"https://llm.example.com/v1","model":"work-model","temperature":0.1,"sendTemperature":true,"maxTokens":2048,"secretSlot":"api-key-2"}]"#,
-        );
-        host.set_setting("activeModel", "\"Work\"");
+        host.set_secret("api-key", "the-key");
+        host.set_setting("provider", "\"Custom\"");
+        host.set_setting("protocol", "\"openai-chat\"");
+        host.set_setting("baseUrl", "\"https://llm.example.com/v1\"");
+        host.set_setting("model", "\"work-model\"");
+        host.set_setting("temperature", "0.1");
+        host.set_setting("maxTokens", "2048");
         host.set_commit_draft(Some(draft_with_message("")));
         host.on_fetch(|request| {
             assert_eq!(
                 request.url,
                 "https://llm.example.com/v1/chat/completions",
-                "the profile's base URL and protocol are used"
+                "the base URL and protocol are used"
             );
             let body: serde_json::Value =
                 serde_json::from_slice(request.body.as_deref().unwrap()).unwrap();
             assert_eq!(body["model"], "work-model");
-            assert_eq!(body["max_tokens"], 2048, "the profile's own token limit");
+            assert_eq!(body["max_tokens"], 2048);
             assert_eq!(body["temperature"], 0.1);
             // The mock host fills the secret placeholder on the way out, as
-            // the IDE does: this is slot 2's key, not the default slot's.
+            // the IDE does.
             assert!(
                 request.headers.iter().any(|(name, value)| {
-                    name == "Authorization" && value == "Bearer the-second-key"
+                    name == "Authorization" && value == "Bearer the-key"
                 }),
-                "the profile's own key slot is used: {:?}",
+                "{:?}",
                 request.headers
             );
             Ok(HttpResponse {
@@ -1310,47 +1146,14 @@ mod tests {
             })
         });
 
-        let result =
-            CommitMessageHelper::default().run_command("generate", &host.invocation(), None);
+        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
-        assert_eq!(host.requests().len(), 1, "one request to the profile");
+        assert_eq!(host.requests().len(), 1);
         assert_eq!(host.commit_draft().unwrap().message, "fix: fix crash");
     }
 
     #[test]
-    fn a_profile_needs_only_its_own_key_slot() {
-        let host = MockHost::install().with_capabilities(&[
-            "vcs.read",
-            "vcs.write",
-            "secrets",
-            "net:api.deepseek.com",
-            "net:llm.example.com",
-        ]);
-        // Deliberately no `api-key`: the active profile uses slot 2.
-        host.set_secret("api-key-2", "the-second-key");
-        host.set_setting(
-            "modelProfiles",
-            r#"[{"name":"Work","provider":"Custom","protocol":"openai-chat","baseUrl":"https://llm.example.com/v1","model":"work-model","temperature":0.5,"sendTemperature":true,"maxTokens":2048,"secretSlot":"api-key-2"}]"#,
-        );
-        host.set_setting("activeModel", "\"Work\"");
-        host.set_commit_draft(Some(draft_with_message("")));
-        host.on_fetch(|_| {
-            Ok(HttpResponse {
-                status: 200,
-                headers: Vec::new(),
-                body: br#"{"choices":[{"message":{"content":"{\"type\":\"fix\",\"subject\":\"fix crash\"}"}}]}"#.to_vec(),
-            })
-        });
-
-        let result =
-            CommitMessageHelper::default().run_command("generate", &host.invocation(), None);
-        assert!(result.is_ok(), "{result:?}");
-        assert_eq!(host.requests().len(), 1, "the profile's key is enough");
-        assert_eq!(host.commit_draft().unwrap().message, "fix: fix crash");
-    }
-
-    #[test]
-    fn a_named_prompt_profile_reaches_the_system_prompt() {
+    fn the_extra_prompt_reaches_the_system_prompt() {
         let host = MockHost::install().with_capabilities(&[
             "vcs.read",
             "vcs.write",
@@ -1359,10 +1162,9 @@ mod tests {
         ]);
         host.set_secret("api-key", "test-key");
         host.set_setting(
-            "promptProfiles",
-            r#"[{"name":"Team","text":"Always mention the ticket id in the body."}]"#,
+            "extraPrompt",
+            "\"Always mention the ticket id in the body.\"",
         );
-        host.set_setting("defaultPrompt", "\"Team\"");
         host.set_commit_draft(Some(draft_with_message("")));
         host.on_fetch(|request| {
             let body: serde_json::Value =
@@ -1372,7 +1174,7 @@ mod tests {
                     .as_str()
                     .unwrap()
                     .contains("Always mention the ticket id in the body."),
-                "the selected profile replaces the single extra prompt: {body}"
+                "{body}"
             );
             Ok(HttpResponse {
                 status: 200,
@@ -1381,8 +1183,7 @@ mod tests {
             })
         });
 
-        let result =
-            CommitMessageHelper::default().run_command("generate", &host.invocation(), None);
+        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(host.commit_draft().unwrap().message, "fix: fix crash");
     }
@@ -1413,8 +1214,7 @@ mod tests {
             })
         });
 
-        let result =
-            CommitMessageHelper::default().run_command("generate", &host.invocation(), None);
+        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(
             host.commit_draft().unwrap().message,
@@ -1442,11 +1242,10 @@ mod tests {
             })
         });
 
-        let result =
-            CommitMessageHelper::default().run_command("generate", &host.invocation(), None);
+        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(host.commit_draft().unwrap().message, "fix: fix crash");
-        let shown = host.notifications();
+        let shown = shown_in_project(&host);
         let body = &shown.last().unwrap().body;
         assert!(body.contains("unknown template variable"), "{body}");
     }
@@ -1474,8 +1273,7 @@ mod tests {
             })
         });
 
-        let result =
-            CommitMessageHelper::default().run_command("generate", &host.invocation(), None);
+        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         let message = host.commit_draft().unwrap().message;
         assert_eq!(message, "fix: fix crash");
@@ -1509,8 +1307,7 @@ mod tests {
             })
         });
 
-        let result =
-            CommitMessageHelper::default().run_command("generate", &host.invocation(), None);
+        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(
             host.commit_draft().unwrap().message,
@@ -1520,7 +1317,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_profile_name_falls_back_to_the_single_settings() {
+    fn an_unknown_template_name_falls_back_to_the_built_in_default() {
         let host = MockHost::install().with_capabilities(&[
             "vcs.read",
             "vcs.write",
@@ -1528,8 +1325,6 @@ mod tests {
             "net:api.deepseek.com",
         ]);
         host.set_secret("api-key", "test-key");
-        host.set_setting("activeModel", "\"Does not exist\"");
-        host.set_setting("defaultPrompt", "\"Does not exist\"");
         host.set_setting("defaultTemplate", "\"Does not exist\"");
         host.set_commit_draft(Some(draft_with_message("")));
         host.on_fetch(|request| {
@@ -1541,72 +1336,9 @@ mod tests {
             })
         });
 
-        let result =
-            CommitMessageHelper::default().run_command("generate", &host.invocation(), None);
+        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(host.commit_draft().unwrap().message, "fix: fix crash");
-    }
-
-    /// Checklist 11: the Preview action renders the template the user is
-    /// editing, with example fields they can switch on and off.
-    #[test]
-    fn template_preview_renders_the_edited_template_with_chosen_fields() {
-        let host = MockHost::install();
-        host.set_setting(
-            "templates",
-            r#"[{"name":"Team","template":"{{header}} -- {{subject}}"}]"#,
-        );
-        host.set_setting("defaultTemplate", "\"Team\"");
-        // Which example fields have values, then the edited template, then
-        // dismiss the editor to leave the preview loop.
-        host.answer_next_prompt(Some(&["type", "subject", "body"]));
-        host.answer_next_prompt(Some(&[
-            "{{header}}{{#body}}\n\n{{body}}{{/body}}{{#closes}}\n\nCloses {{closes}}{{/closes}}\n\nfooter",
-        ]));
-        host.answer_next_prompt(None);
-
-        let result = CommitMessageHelper::default().run_command(
-            "template-preview",
-            &host.invocation(),
-            None,
-        );
-        assert!(result.is_ok(), "{result:?}");
-        let shown = host.notifications();
-        let notice = shown.last().expect("a preview is shown");
-        assert_eq!(notice.level, NotificationLevel::Info, "{notice:?}");
-        assert!(notice.body.contains("<type>: <subject>"), "{}", notice.body);
-        assert!(notice.body.contains("<body>"), "{}", notice.body);
-        assert!(notice.body.contains("footer"), "{}", notice.body);
-        assert!(
-            !notice.body.contains("Closes"),
-            "an unselected field leaves its conditional section out: {}",
-            notice.body
-        );
-    }
-
-    /// Checklist 12: a broken template is reported while previewing, before
-    /// any generation request falls back to Default.
-    #[test]
-    fn template_preview_reports_the_template_error() {
-        let host = MockHost::install();
-        host.answer_next_prompt(Some(&["type", "subject"]));
-        host.answer_next_prompt(Some(&["{{unknown}}"]));
-        host.answer_next_prompt(None);
-
-        let result = CommitMessageHelper::default().run_command(
-            "template-preview",
-            &host.invocation(),
-            None,
-        );
-        assert!(result.is_ok(), "{result:?}");
-        let shown = host.notifications();
-        let notice = shown.last().expect("the error is shown");
-        assert_eq!(notice.level, NotificationLevel::Error, "{notice:?}");
-        assert!(
-            notice.body.contains("unknown template variable"),
-            "{}",
-            notice.body
-        );
     }
 
     /// Checklist 12: variable help names every variable, the conditional
@@ -1614,10 +1346,9 @@ mod tests {
     #[test]
     fn template_help_lists_variables_and_the_restore_entry() {
         let host = MockHost::install();
-        let result =
-            CommitMessageHelper::default().run_command("template-help", &host.invocation(), None);
+        let result = CommitMessageHelper.run_command("template-help", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
-        let shown = host.notifications();
+        let shown = shown_in_project(&host);
         let notice = shown.last().expect("the help is shown");
         assert_eq!(notice.level, NotificationLevel::Info, "{notice:?}");
         for expected in [
@@ -1641,65 +1372,9 @@ mod tests {
         }
     }
 
-    /// Checklist 27: the levels action reflects the mapping, not the full
-    /// enum in the settings table.
+    /// Checklist 24/25: the thinking level and preset reach the body.
     #[test]
-    fn thinking_levels_action_lists_what_the_mapping_offers() {
-        let host = MockHost::install();
-        host.set_setting(
-            "modelProfiles",
-            r#"[{"name":"Reasoner","thinkingLevel":"ENABLED","thinkingPreset":"custom","thinkingMapping":"{\"ENABLED\":{\"enable_thinking\":true}}"}]"#,
-        );
-        host.set_setting("activeModel", "\"Reasoner\"");
-        let result =
-            CommitMessageHelper::default().run_command("thinking-levels", &host.invocation(), None);
-        assert!(result.is_ok(), "{result:?}");
-        let shown = host.notifications();
-        let notice = shown.last().expect("the levels are shown");
-        assert!(notice.body.contains("DEFAULT, ENABLED"), "{}", notice.body);
-        assert!(!notice.body.contains(", LOW"), "{}", notice.body);
-    }
-
-    #[test]
-    fn thinking_levels_action_warns_about_an_unavailable_level() {
-        let host = MockHost::install();
-        host.set_setting(
-            "modelProfiles",
-            r#"[{"name":"Reasoner","thinkingLevel":"LOW","thinkingPreset":"custom","thinkingMapping":"{\"ENABLED\":{\"enable_thinking\":true}}"}]"#,
-        );
-        host.set_setting("activeModel", "\"Reasoner\"");
-        let result =
-            CommitMessageHelper::default().run_command("thinking-levels", &host.invocation(), None);
-        assert!(result.is_ok(), "{result:?}");
-        let shown = host.notifications();
-        let notice = shown.last().expect("the warning is shown");
-        assert!(notice.body.contains("Model default"), "{}", notice.body);
-    }
-
-    /// Checklist 26: help explains the mapping, validates the current one and
-    /// copies the preset template for restoring it.
-    #[test]
-    fn thinking_help_action_shows_the_template_and_the_mapping_error() {
-        let host = MockHost::install().with_capabilities(&["clipboard"]);
-        host.set_setting("thinkingPreset", "\"openai-effort\"");
-        host.set_setting("thinkingMapping", "\"[]\"");
-        let result =
-            CommitMessageHelper::default().run_command("thinking-help", &host.invocation(), None);
-        assert!(result.is_ok(), "{result:?}");
-        assert!(
-            host.clipboard().unwrap().contains("reasoning_effort"),
-            "the preset template is copied: {:?}",
-            host.clipboard()
-        );
-        let shown = host.notifications();
-        let notice = shown.last().expect("the help is shown");
-        assert!(notice.body.contains("$thinking_budget"), "{}", notice.body);
-        assert!(notice.body.contains("Mapping error"), "{}", notice.body);
-    }
-
-    /// Checklist 24/25: the active profile's level and preset reach the body.
-    #[test]
-    fn generate_sends_the_profiles_thinking_fragment() {
+    fn generate_sends_the_thinking_fragment() {
         let host = MockHost::install().with_capabilities(&[
             "vcs.read",
             "vcs.write",
@@ -1707,11 +1382,8 @@ mod tests {
             "net:api.deepseek.com",
         ]);
         host.set_secret("api-key", "test-key");
-        host.set_setting(
-            "modelProfiles",
-            r#"[{"name":"Reasoner","thinkingLevel":"HIGH","thinkingPreset":"openai-effort"}]"#,
-        );
-        host.set_setting("activeModel", "\"Reasoner\"");
+        host.set_setting("thinkingLevel", "\"HIGH\"");
+        host.set_setting("thinkingPreset", "\"openai-effort\"");
         host.set_commit_draft(Some(draft_with_message("")));
         host.on_fetch(|request| {
             let body: serde_json::Value =
@@ -1724,10 +1396,9 @@ mod tests {
             })
         });
 
-        let result =
-            CommitMessageHelper::default().run_command("generate", &host.invocation(), None);
+        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
-        let shown = host.notifications();
+        let shown = shown_in_project(&host);
         let notice = shown.last().expect("the diagnostics are shown");
         assert!(notice.body.contains("thinking: HIGH"), "{}", notice.body);
     }
@@ -1742,11 +1413,12 @@ mod tests {
             "net:api.deepseek.com",
         ]);
         host.set_secret("api-key", "test-key");
+        host.set_setting("thinkingLevel", "\"LOW\"");
+        host.set_setting("thinkingPreset", "\"custom\"");
         host.set_setting(
-            "modelProfiles",
-            r#"[{"name":"Reasoner","thinkingLevel":"LOW","thinkingPreset":"custom","thinkingMapping":"{\"ENABLED\":{\"enable_thinking\":true}}"}]"#,
+            "thinkingMapping",
+            &serde_json::to_string(r#"{"ENABLED":{"enable_thinking":true}}"#).unwrap(),
         );
-        host.set_setting("activeModel", "\"Reasoner\"");
         host.set_commit_draft(Some(draft_with_message("")));
         host.on_fetch(|request| {
             let body: serde_json::Value =
@@ -1759,16 +1431,15 @@ mod tests {
             })
         });
 
-        let result =
-            CommitMessageHelper::default().run_command("generate", &host.invocation(), None);
+        let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
-        let shown = host.notifications();
+        let shown = shown_in_project(&host);
         let notice = shown.last().expect("the diagnostics are shown");
         assert!(notice.body.contains("LOW"), "{}", notice.body);
     }
 
     #[test]
-    fn a_connection_test_keeps_the_profiles_valid_thinking_budget() {
+    fn a_connection_test_keeps_a_valid_thinking_budget() {
         for (preset, mapping) in [
             ("anthropic-budget", None),
             ("auto", None),
@@ -1797,8 +1468,7 @@ mod tests {
                 })
             });
 
-            let result =
-                CommitMessageHelper::default().run_command("test", &host.invocation(), None);
+            let result = CommitMessageHelper.run_command("test", &host.invocation(), None);
             assert!(result.is_ok(), "{preset}: {result:?}");
         }
     }
@@ -1827,11 +1497,10 @@ mod tests {
                 })
             });
 
-            let result =
-                CommitMessageHelper::default().run_command("generate", &host.invocation(), None);
+            let result = CommitMessageHelper.run_command("generate", &host.invocation(), None);
             assert!(result.is_ok(), "{result:?}");
             assert_eq!(host.commit_draft().unwrap().message, "fix: fix crash");
-            let shown = host.notifications();
+            let shown = shown_in_project(&host);
             assert!(shown.last().unwrap().body.contains("Invalid template"));
         }
     }
@@ -1841,138 +1510,11 @@ mod tests {
     #[test]
     fn restore_default_copies_the_built_in_template() {
         let host = MockHost::install().with_capabilities(&["clipboard"]);
-        let result = CommitMessageHelper::default().run_command(
-            "template-default",
-            &host.invocation(),
-            None,
-        );
+        let result = CommitMessageHelper.run_command("template-default", &host.invocation(), None);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(host.clipboard().as_deref(), Some(prompt::DEFAULT_TEMPLATE));
-        let shown = host.notifications();
+        let shown = shown_in_project(&host);
         let notice = shown.last().expect("the template is shown");
         assert!(notice.body.contains("{{header}}"), "{}", notice.body);
-    }
-
-    /// Answers the manual editor's dialogs in order: a field list choice, a
-    /// typed text, or `None` for Cancel / Escape.
-    fn answer(host: &MockHost, answers: &[Option<&str>]) {
-        for answer in answers {
-            match answer {
-                Some(text) => host.answer_next_prompt(Some(&[*text])),
-                None => host.answer_next_prompt(None),
-            }
-        }
-    }
-
-    fn repository_host() -> MockHost {
-        let host = MockHost::install().with_capabilities(&["vcs.read", "vcs.write", "storage"]);
-        host.set_vcs_status(Some(openidea_plugin::RepositoryStatus {
-            root: "/repo".into(),
-            ..Default::default()
-        }));
-        host.set_commit_draft(Some(draft()));
-        host
-    }
-
-    #[test]
-    fn manual_edits_the_fields_one_at_a_time_and_writes_them() {
-        let host = repository_host();
-        answer(
-            &host,
-            &[
-                Some("type"),
-                Some("fix"),
-                Some("scope"),
-                Some("core"),
-                Some("subject"),
-                Some("preserve command arguments"),
-                Some("body"),
-                Some("--force is no longer required.\n-1 means unlimited"),
-                Some("skipCi"),
-                Some("marker:1"),
-                Some("apply"),
-            ],
-        );
-        CommitMessageHelper::default()
-            .run_command("manual", &host.invocation(), None)
-            .unwrap();
-        assert_eq!(
-            host.commit_draft().unwrap().message,
-            "fix(core): preserve command arguments\n\n- --force is no longer required.\n- -1 means unlimited\n\n[ci skip]"
-        );
-        assert!(!host.storage().contains_key("editor:/repo"));
-        assert!(host.revealed_views().is_empty(), "no tool window");
-    }
-
-    #[test]
-    fn closing_the_field_list_keeps_the_draft_for_next_time() {
-        let host = repository_host();
-        answer(&host, &[Some("subject"), Some("unfinished draft"), None]);
-        CommitMessageHelper::default()
-            .run_command("manual", &host.invocation(), None)
-            .unwrap();
-        assert_eq!(host.commit_draft().unwrap().message, "old message");
-        assert!(host.storage().contains_key("editor:/repo"));
-
-        answer(&host, &[Some("apply")]);
-        CommitMessageHelper::default()
-            .run_command("manual", &host.invocation(), None)
-            .unwrap();
-        assert_eq!(
-            host.commit_draft().unwrap().message,
-            "feat: unfinished draft"
-        );
-    }
-
-    #[test]
-    fn cancelling_one_field_keeps_its_previous_value() {
-        let host = repository_host();
-        answer(
-            &host,
-            &[
-                Some("subject"),
-                Some("first"),
-                Some("subject"),
-                None,
-                Some("apply"),
-            ],
-        );
-        CommitMessageHelper::default()
-            .run_command("manual", &host.invocation(), None)
-            .unwrap();
-        assert_eq!(host.commit_draft().unwrap().message, "feat: first");
-    }
-
-    #[test]
-    fn an_invalid_header_returns_to_the_field_list_with_its_values() {
-        let host = repository_host();
-        answer(
-            &host,
-            &[
-                Some("subject"),
-                Some("stop the crash"),
-                Some("scope"),
-                Some("core)"),
-                Some("apply"),
-                Some("scope"),
-                Some("core"),
-                Some("apply"),
-            ],
-        );
-        CommitMessageHelper::default()
-            .run_command("manual", &host.invocation(), None)
-            .unwrap();
-        assert!(
-            host.notifications()
-                .iter()
-                .any(|n| n.level == NotificationLevel::Warning
-                    && n.body.contains("single-line header")),
-            "the rejected header is reported"
-        );
-        assert_eq!(
-            host.commit_draft().unwrap().message,
-            "feat(core): stop the crash",
-            "the list came back with the subject kept"
-        );
     }
 }

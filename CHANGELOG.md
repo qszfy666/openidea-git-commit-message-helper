@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.0
+
+简化版：提交面板只保留生成和按补充要求生成，去掉不常用的按钮、编辑器和档案；升级到插件 API 1.5，需要 OpenIDEA 0.1.41。
+
+- **升级到插件 API 1.5**：需要 OpenIDEA 0.1.41。SDK 依赖改为 `v0.1.41`，`engines.openidea` 改为 `"^1.5"`，不再支持 0.1.40。
+- **新增可选能力 `net:ask`**（API 1.5）：Base URL 可以指向预设列表以外的任意 HTTPS 主机。命令第一次连接某个主机时，IDE 弹框询问，用户逐个允许或拒绝，之后可以撤销。后台调用不询问，非 loopback 的明文 HTTP 仍被拒绝。原有的 `net:<host>` 列表保留。
+- 移除**模型档案**和**提示词档案**：删掉 LLM Settings 的 **Model profiles**、**Active model profile**，Prompts 页的 **Prompt profiles**、**Default prompt profile**，以及只供档案使用的密钥槽 `api-key-2`～`api-key-4`。连接、温度、token 上限、思考参数和额外系统提示词都只读单项设置。旧版本存下的档案值不再读取，选过档案的用户要把需要的值填回单项设置。输出模板表格保留。
+- LLM Settings 页只保留 **Test** 动作，删掉 **Models**、**Request URL**、**Thinking Levels**、**Thinking Help** 及对应命令。这几个动作的结果只走通知，插件通知被隐藏时看起来没有任何反应。**Model** 仍需手动填写：OpenIDEA 0.1.41 的设置项不支持由插件提供下拉选项，插件也不能写设置。
+- 移除 **Format Commit Message** 和 **Edit Commit Message Fields** 两个按钮及其功能。提交信息上方只保留 **Generate Commit Message** 和 **Generate Commit Message with Requirements**。
+- 随编辑器一起删掉的设置：Commit 页 Editor 组（字段显隐、**Type option order**、**Common types shown first**）、Skip CI 组（**Skip CI markers**、**Default Skip CI marker**、**Skip CI checked by default**），以及 Buttons 组的 **Show the Format button**、**Show the Edit Fields button**。已存的这些值不再读取。编辑器存在插件存储里的按项目草稿（`editor:<仓库根>`）也不再读取。
+- 生成时提交信息框不管有没有字，都先换成「正在生成提交信息…」（以前只在框为空时才写），结果出来再替换；生成失败或取消时恢复原来的文字。生成期间你自己输入的内容仍不会被覆盖。
+- 插件的通知改用 API 1.5 的 `Project::notify` 发到当前项目的主窗口。设置页的按钮（**Test**、**Variables**、**Restore Default**）在设置窗口里运行，以前的通知发给设置窗口，而 0.1.41 的设置窗口不显示插件通知，结果直接丢失；现在出现在主窗口的「通知」面板里（插件通知组设为显示时也会弹出）。没有打开项目时仍发给触发命令的窗口。
+- 删掉 Commit Templates 页的 **Preview** 动作。它要在设置窗口里弹选择框和输入框，而 0.1.41 的设置窗口不显示插件对话框，宿主等回答又没有超时，会让插件后续的命令（包括生成）一直排队，直到关掉设置窗口。模板写错时仍在生成时报告并回退内置 Default。
+- 模板变量 `{{skipCi}}` 保留，模型返回的 `skipCi` 字段照常渲染。
+- `cargo test` 从 130 个减到 101 个（100 个单元测试和 1 个词条覆盖测试）：删掉 Format、编辑器、档案、模型列表、思考等级/帮助和模板预览的测试，原本通过档案设置场景的思考参数测试改用单项设置；新增测试确认已删的命令不存在、旧档案值不再生效、有字的框也显示占位并在失败时恢复、设置页动作的结果发到项目主窗口。新行为的测试都先在改动前失败。
+
 ## 0.8.0
 
 迁移清单第三批与按需条目：3、5、6、7、16（部分）、17、18、29、32、34、35、39、40、47。仍需要 OpenIDEA 0.1.40（插件 API 1.4）；新增 `storage` 与 `events` 两个低风险能力。

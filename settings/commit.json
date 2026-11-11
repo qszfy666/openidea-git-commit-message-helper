@@ -82,133 +82,16 @@
         }
       ]
     },
-    "editorShowType": {
-      "type": "boolean",
-      "title": "Show the type field",
-      "description": "Editor: whether the manual structured editor shows these fields. The subject is always shown.",
-      "group": "Editor",
-      "default": true
-    },
-    "editorShowScope": {
-      "type": "boolean",
-      "title": "Show the scope field",
-      "group": "Editor",
-      "default": true
-    },
-    "editorShowBody": {
-      "type": "boolean",
-      "title": "Show the body field",
-      "group": "Editor",
-      "default": true
-    },
-    "editorShowChanges": {
-      "type": "boolean",
-      "title": "Show the breaking-change field",
-      "group": "Editor",
-      "default": true
-    },
-    "editorShowCloses": {
-      "type": "boolean",
-      "title": "Show the closes field",
-      "group": "Editor",
-      "default": true
-    },
-    "editorShowSkipCi": {
-      "type": "boolean",
-      "title": "Show the Skip CI fields",
-      "group": "Editor",
-      "default": true
-    },
-    "editorTypeStyle": {
-      "type": "string",
-      "enum": [
-        "table",
-        "common-first"
-      ],
-      "title": "Type option order",
-      "description": "table keeps the order of the allowed types above; common-first puts the first rows first and sorts the rest. The host form draws a dropdown, so a radio list is not available.",
-      "group": "Editor",
-      "default": "table"
-    },
-    "editorCommonTypes": {
-      "type": "integer",
-      "title": "Common types shown first",
-      "description": "Only used with the common-first order: how many rows of the allowed types stay on top.",
-      "group": "Editor",
-      "default": 3
-    },
-    "skipCiPresets": {
-      "type": "array",
-      "title": "Skip CI markers",
-      "description": "The markers the editor offers. Name is how a project picks the default; Marker is what the message gets.",
-      "group": "Skip CI",
-      "items": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name",
-            "default": ""
-          },
-          "marker": {
-            "type": "string",
-            "title": "Marker",
-            "default": ""
-          }
-        }
-      },
-      "default": [
-        {
-          "name": "skip ci",
-          "marker": "[skip ci]"
-        },
-        {
-          "name": "ci skip",
-          "marker": "[ci skip]"
-        },
-        {
-          "name": "no ci",
-          "marker": "[no ci]"
-        }
-      ]
-    },
-    "skipCiDefault": {
-      "type": "string",
-      "title": "Default Skip CI marker",
-      "description": "Name of a marker above, or the marker itself. Blank uses the first marker.",
-      "group": "Skip CI",
-      "default": "[skip ci]"
-    },
-    "skipCiDefaultChecked": {
-      "type": "boolean",
-      "title": "Skip CI checked by default",
-      "description": "Whether the editor starts with the marker ticked.",
-      "group": "Skip CI",
-      "default": false
-    },
     "actionGenerate": {
       "type": "boolean",
       "title": "Show the Generate button",
-      "description": "The four buttons above the commit message. A hidden button is removed from the toolbar; the command stays available in Find Action.",
+      "description": "The two buttons above the commit message. A hidden button is removed from the toolbar; the command stays available in Find Action.",
       "group": "Buttons",
       "default": true
     },
     "actionGenerateWithContext": {
       "type": "boolean",
       "title": "Show the Generate with Requirements button",
-      "group": "Buttons",
-      "default": true
-    },
-    "actionFormat": {
-      "type": "boolean",
-      "title": "Show the Format button",
-      "group": "Buttons",
-      "default": true
-    },
-    "actionManual": {
-      "type": "boolean",
-      "title": "Show the Edit Fields button",
-      "description": "Opens a list of the commit fields; each field is edited in its own dialog.",
       "group": "Buttons",
       "default": true
     }

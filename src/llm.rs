@@ -1,7 +1,8 @@
 //! LLM clients for the three supported protocols.
 //!
 //! All requests go through `host::fetch`, so the IDE enforces the `net:<host>`
-//! capabilities declared in `plugin.toml`. The API key is never read by the
+//! capabilities declared in `plugin.toml`; under `net:ask` it asks the user
+//! about any other HTTPS host. The API key is never read by the
 //! plugin: `{{secret:api-key}}` is filled in by the host from the system
 //! keychain.
 //!
@@ -9,7 +10,7 @@
 //! compatibility retries below share one budget, so a model that refuses a
 //! parameter cannot push the command past that window.
 
-use crate::config::{Config, Protocol, UiLanguage};
+use crate::config::{self, Config, Protocol, UiLanguage};
 use crate::thinking;
 use crate::ui;
 use openidea_plugin::{Error, HttpRequest, host};
@@ -33,10 +34,10 @@ fn strings() -> &'static ui::Strings {
     ui::strings(UiLanguage::load())
 }
 
-fn ensure_ready(config: &Config) -> Result<(), Error> {
-    if !host::secret_is_set(&config.secret_slot) {
+fn ensure_ready() -> Result<(), Error> {
+    if !host::secret_is_set(config::SECRET) {
         return Err(Error::Failed(
-            strings().llm_no_key.replace("{slot}", &config.secret_slot),
+            strings().llm_no_key.replace("{slot}", config::SECRET),
         ));
     }
     Ok(())
@@ -81,19 +82,6 @@ fn join_endpoint(base: &str, suffix: &str) -> Result<String, Error> {
 /// The URL the plugin posts a generation request to.
 pub fn endpoint(config: &Config) -> Result<String, Error> {
     endpoint_with(config, protocol_suffix(config.protocol))
-}
-
-/// The model-list URL of the same Base URL. A Base URL that names a complete
-/// generation endpoint (which `endpoint` accepts) is reduced to its parent
-/// before `/models` is appended.
-fn models_endpoint(config: &Config) -> Result<String, Error> {
-    let base = config.effective_base_url();
-    let base = base.trim().trim_end_matches('/');
-    let base = ["/chat/completions", "/responses", "/messages"]
-        .iter()
-        .find_map(|suffix| base.strip_suffix(*suffix))
-        .unwrap_or(base);
-    join_endpoint(base, "/models")
 }
 
 fn has_url_path(url: &str) -> bool {
@@ -245,14 +233,10 @@ pub struct Answer {
     pub diagnostics: Diagnostics,
 }
 
-/// The host fills `{{secret:<slot>}}` in from the keychain on the way out.
-/// Only declared slots can be named, and the plugin never reads the value.
-fn secret_placeholder(config: &Config) -> String {
-    format!("{{{{secret:{}}}}}", config.secret_slot)
-}
-
+/// The host fills `{{secret:api-key}}` in from the keychain on the way out;
+/// the plugin never reads the value.
 fn authorize(config: &Config, request: HttpRequest) -> HttpRequest {
-    let secret = secret_placeholder(config);
+    let secret = format!("{{{{secret:{}}}}}", config::SECRET);
     let bearer = format!("Bearer {secret}");
     match config.protocol {
         Protocol::Anthropic => request
@@ -494,7 +478,7 @@ fn send(config: &Config, system: &str, user: &str, max_tokens: u32) -> Result<An
 
 /// Sends one generation request and returns the assistant's text.
 pub fn generate(config: &Config, system: &str, user: &str) -> Result<Answer, Error> {
-    ensure_ready(config)?;
+    ensure_ready()?;
     let answer = send(config, system, user, config.max_tokens)?;
     let text = extract_content(config.protocol, &answer.text)?;
     Ok(Answer { text, ..answer })
@@ -502,7 +486,7 @@ pub fn generate(config: &Config, system: &str, user: &str) -> Result<Answer, Err
 
 /// Sends a minimal request to check the configured endpoint, model and key.
 pub fn test(config: &Config) -> Result<Answer, Error> {
-    ensure_ready(config)?;
+    ensure_ready()?;
     ensure_model(config)?;
     let thinking = thinking::resolve(&config.thinking, config.protocol, config.max_tokens);
     let has_budget = thinking
@@ -532,54 +516,6 @@ pub fn test(config: &Config) -> Result<Answer, Error> {
         )
     })?;
     Ok(answer)
-}
-
-/// The model ids the endpoint lists, sorted, for the picker in Settings.
-pub fn models(config: &Config) -> Result<Vec<String>, Error> {
-    ensure_ready(config)?;
-    let url = models_endpoint(config)?;
-    let mut request = authorize(
-        config,
-        HttpRequest::get(&url).header("Accept", "application/json"),
-    );
-    request.timeout_ms = Some(BUDGET_MS as u32);
-    let response = host::fetch(&request)?;
-    let text = response.text();
-    if !(200..300).contains(&response.status) {
-        return Err(Error::Failed(
-            strings()
-                .llm_models_failed
-                .replace("{status}", &response.status.to_string())
-                .replace("{detail}", &error_message(&text)),
-        ));
-    }
-    let value: Value = serde_json::from_str(text.trim()).map_err(|e| {
-        Error::Failed(
-            strings()
-                .llm_models_not_json
-                .replace("{error}", &e.to_string())
-                .replace("{body}", &clip(&text, 400)),
-        )
-    })?;
-    let mut ids: Vec<String> = value
-        .get("data")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.get("id").and_then(Value::as_str))
-                .map(str::trim)
-                .filter(|id| !id.is_empty())
-                .map(ToOwned::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
-    if ids.is_empty() {
-        return Err(Error::Failed(strings().llm_models_empty.into()));
-    }
-    ids.sort();
-    ids.dedup();
-    Ok(ids)
 }
 
 /// The Responses API returns `output: [{type:"reasoning",...},{content:[{type:"output_text",text}...]}]`
@@ -681,22 +617,8 @@ mod tests {
                 description: String::new(),
             }],
             extra_prompt: String::new(),
-            secret_slot: "api-key".into(),
             template: None,
             thinking: thinking::Settings::default(),
-            editor: crate::config::EditorSettings {
-                show_type: true,
-                show_scope: true,
-                show_body: true,
-                show_changes: true,
-                show_closes: true,
-                show_skip_ci: true,
-                type_style: crate::config::TypeStyle::Table,
-                common_types: 3,
-                skip_ci_presets: Vec::new(),
-                skip_ci_default: String::new(),
-                skip_ci_checked: false,
-            },
         }
     }
 
@@ -747,51 +669,21 @@ mod tests {
     }
 
     #[test]
-    fn lists_models_next_to_the_protocol_path() {
-        assert_eq!(
-            models_endpoint(&config(Provider::OpenAi, Protocol::OpenAiChat, "")).unwrap(),
-            "https://api.openai.com/v1/models"
-        );
-        assert_eq!(
-            models_endpoint(&config(Provider::Anthropic, Protocol::Anthropic, "")).unwrap(),
-            "https://api.anthropic.com/v1/models"
-        );
-        assert_eq!(
-            models_endpoint(&config(
-                Provider::Magpie,
-                Protocol::OpenAiChat,
-                "http://127.0.0.1:3425"
-            ))
-            .unwrap(),
-            "http://127.0.0.1:3425/v1/models"
-        );
-        // The Base URL may name the generation endpoint itself, as `endpoint`
-        // accepts; the model list has to go next to it, not under it.
-        assert_eq!(
-            models_endpoint(&config(
-                Provider::Custom,
-                Protocol::OpenAiChat,
-                "https://llm.example.com/v1/chat/completions"
-            ))
-            .unwrap(),
-            "https://llm.example.com/v1/models"
-        );
-    }
-
-    #[test]
-    fn a_profile_carries_its_own_secret_slot() {
+    fn the_api_key_goes_in_the_header_of_the_protocol() {
         let mut config = config(Provider::OpenAi, Protocol::OpenAiChat, "");
-        config.secret_slot = "{{SECRET_hhyvxk2c}}".into();
         let chat = authorize(&config, HttpRequest::post("https://example.com", "{}"));
         assert!(chat.headers.iter().any(|(name, value)| {
-            name == "Authorization" && value == "Bearer {{secret:{{SECRET_hhyvxk2c}}}}"
+            name == "Authorization" && value == "Bearer {{secret:api-key}}"
         }));
 
         config.protocol = Protocol::Anthropic;
         let anthropic = authorize(&config, HttpRequest::post("https://example.com", "{}"));
-        assert!(anthropic.headers.iter().any(|(name, value)| {
-            name == "x-api-key" && value == "{{secret:{{SECRET_hhyvxk2c}}}}"
-        }));
+        assert!(
+            anthropic
+                .headers
+                .iter()
+                .any(|(name, value)| { name == "x-api-key" && value == "{{secret:api-key}}" })
+        );
     }
 
     #[test]
@@ -1097,47 +989,6 @@ max_completion_tokens 64000 · temperature omitted · 2 attempts · adjusted: to
         );
     }
 
-    #[test]
-    fn model_list_reads_the_ids_and_sorts_them() {
-        let host = MockHost::install().with_capabilities(&["secrets", "net:api.deepseek.com"]);
-        host.set_secret("api-key", "test-key");
-        host.on_fetch(|request| {
-            assert_eq!(request.method, "GET");
-            assert!(request.url.ends_with("/v1/models"), "{}", request.url);
-            assert!(
-                request
-                    .headers
-                    .iter()
-                    .any(|(name, value)| name == "Authorization" && value.starts_with("Bearer ")),
-                "the key goes out in the header: {:?}",
-                request.headers
-            );
-            Ok(HttpResponse {
-                status: 200,
-                headers: Vec::new(),
-                body: br#"{"data":[{"id":"deepseek-reasoner"},{"id":"deepseek-chat"},{"id":"deepseek-chat"}]}"#.to_vec(),
-            })
-        });
-
-        let models = models(&config(Provider::DeepSeek, Protocol::OpenAiChat, "")).unwrap();
-        assert_eq!(models, vec!["deepseek-chat", "deepseek-reasoner"]);
-    }
-
-    #[test]
-    fn model_list_reports_a_refused_request() {
-        let host = MockHost::install().with_capabilities(&["secrets", "net:api.deepseek.com"]);
-        host.set_secret("api-key", "test-key");
-        host.on_fetch(|_| {
-            Ok(HttpResponse {
-                status: 401,
-                headers: Vec::new(),
-                body: br#"{"error":{"message":"bad key"}}"#.to_vec(),
-            })
-        });
-
-        let error = models(&config(Provider::DeepSeek, Protocol::OpenAiChat, "")).unwrap_err();
-        assert!(format!("{error}").contains("bad key"), "{error:?}");
-    }
     #[test]
     fn changing_temperature_retries_the_configured_value() {
         let host =

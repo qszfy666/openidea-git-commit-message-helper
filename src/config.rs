@@ -182,96 +182,6 @@ pub struct CommitType {
     pub description: String,
 }
 
-/// How the editor's type control orders the allowed types (checklist 16).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TypeStyle {
-    /// The order of the settings table.
-    Table,
-    /// The first `common_types` rows first, then the rest alphabetically: the
-    /// types this repository uses most sit at the top.
-    CommonFirst,
-}
-
-impl TypeStyle {
-    fn parse(value: Option<&str>) -> Self {
-        match value.map(str::trim) {
-            Some("common-first") => Self::CommonFirst,
-            _ => Self::Table,
-        }
-    }
-}
-
-/// One Skip CI marker the editor offers (checklist 18).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SkipCiPreset {
-    /// The row name, so a project can pick one by name.
-    pub name: String,
-    /// What is written into the message.
-    pub marker: String,
-}
-
-fn skip_ci_preset(name: &str, marker: &str) -> SkipCiPreset {
-    SkipCiPreset {
-        name: name.trim().to_owned(),
-        marker: marker.trim().to_owned(),
-    }
-}
-
-/// The markers the reference plugin offers; a settings table replaces them.
-fn default_skip_ci_presets() -> Vec<SkipCiPreset> {
-    [
-        ("skip ci", "[skip ci]"),
-        ("ci skip", "[ci skip]"),
-        ("no ci", "[no ci]"),
-    ]
-    .into_iter()
-    .map(|(name, marker)| skip_ci_preset(name, marker))
-    .collect()
-}
-
-fn skip_ci_presets() -> Vec<SkipCiPreset> {
-    let presets: Vec<SkipCiPreset> = setting_json("skipCiPresets")
-        .and_then(|value| match value {
-            Value::Array(items) => Some(
-                items
-                    .into_iter()
-                    .filter_map(|item| {
-                        let marker = item.get("marker").and_then(Value::as_str)?;
-                        let name = item.get("name").and_then(Value::as_str).unwrap_or(marker);
-                        Some(skip_ci_preset(name, marker))
-                    })
-                    .filter(|preset| !preset.marker.is_empty())
-                    .collect(),
-            ),
-            _ => None,
-        })
-        .unwrap_or_default();
-    if presets.is_empty() {
-        default_skip_ci_presets()
-    } else {
-        presets
-    }
-}
-
-/// What the manual editor shows and offers (checklists 16–18).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EditorSettings {
-    pub show_type: bool,
-    pub show_scope: bool,
-    pub show_body: bool,
-    pub show_changes: bool,
-    pub show_closes: bool,
-    pub show_skip_ci: bool,
-    pub type_style: TypeStyle,
-    /// How many rows of the settings table count as the common types.
-    pub common_types: usize,
-    pub skip_ci_presets: Vec<SkipCiPreset>,
-    /// The marker the form starts with.
-    pub skip_ci_default: String,
-    /// Whether the Skip CI checkbox starts checked.
-    pub skip_ci_checked: bool,
-}
-
 fn commit_type(title: &str, description: &str) -> CommitType {
     CommitType {
         title: title.trim().to_owned(),
@@ -344,8 +254,8 @@ fn setting_json(key: &str) -> Option<Value> {
     host::setting(key).and_then(|raw| serde_json::from_str(&raw).ok())
 }
 
-/// The row of a named-profile table selected by its selector setting. A blank
-/// selector leaves the single settings in charge; a name no row has also does.
+/// The row of a named table selected by its selector setting. A blank selector
+/// or a name no row has selects nothing.
 fn selected(key: &str, selector: &str) -> Option<Value> {
     let name = host::setting_string(selector)?;
     let name = name.trim();
@@ -362,59 +272,8 @@ fn selected(key: &str, selector: &str) -> Option<Value> {
     })
 }
 
-/// A field of the active profile, or the single setting with the same key.
-fn profile_text(profile: Option<&Value>, key: &str) -> Option<String> {
-    profile
-        .and_then(|value| value.get(key))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .or_else(|| host::setting_string(key))
-}
-
-fn profile_number(profile: Option<&Value>, key: &str) -> Option<f64> {
-    profile
-        .and_then(|value| value.get(key))
-        .and_then(Value::as_f64)
-        .or_else(|| host::setting_number(key))
-}
-
-fn profile_bool(profile: Option<&Value>, key: &str) -> Option<bool> {
-    profile
-        .and_then(|value| value.get(key))
-        .and_then(Value::as_bool)
-        .or_else(|| host::setting_bool(key))
-}
-
-/// Secrets must be declared in plugin.toml, so a profile can only name one of
-/// the four fixed slots. Anything else falls back to the original key.
-fn secret_slot(profile: Option<&Value>) -> String {
-    const SLOTS: [&str; 4] = ["api-key", "api-key-2", "api-key-3", "api-key-4"];
-    let candidate = profile_text(profile, "secretSlot").unwrap_or_default();
-    let candidate = candidate.trim();
-    if SLOTS.contains(&candidate) {
-        candidate.to_owned()
-    } else {
-        "api-key".to_owned()
-    }
-}
-
-impl EditorSettings {
-    /// The options of the type control (checklist 16). The styles the host's
-    /// declarative form cannot draw — a radio list — stay unimplemented; the
-    /// order and the common-type count do apply.
-    pub fn type_options(&self, types: &[String]) -> Vec<String> {
-        match self.type_style {
-            TypeStyle::Table => types.to_vec(),
-            TypeStyle::CommonFirst => {
-                let common = self.common_types.min(types.len());
-                let (head, tail) = types.split_at(common);
-                let mut rest = tail.to_vec();
-                rest.sort();
-                head.iter().chain(rest.iter()).cloned().collect()
-            }
-        }
-    }
-}
+/// The plugin secret every request carries, declared in `plugin.toml`.
+pub const SECRET: &str = "api-key";
 
 /// Which of the Commit panel's plugin buttons stay visible (checklist 6).
 /// `when` clauses in `plugin.toml` read the context keys this derives, so a
@@ -423,8 +282,6 @@ impl EditorSettings {
 pub struct Actions {
     pub generate: bool,
     pub generate_with_context: bool,
-    pub format: bool,
-    pub manual: bool,
 }
 
 impl Actions {
@@ -432,42 +289,20 @@ impl Actions {
         Self {
             generate: host::setting_bool("actionGenerate").unwrap_or(true),
             generate_with_context: host::setting_bool("actionGenerateWithContext").unwrap_or(true),
-            format: host::setting_bool("actionFormat").unwrap_or(true),
-            manual: host::setting_bool("actionManual").unwrap_or(true),
         }
     }
 
     /// The context keys the menus read, in the order of `plugin.toml`.
-    pub fn context_keys(self) -> [(&'static str, bool); 4] {
+    pub fn context_keys(self) -> [(&'static str, bool); 2] {
         [
             ("actionGenerate", self.generate),
             ("actionGenerateWithContext", self.generate_with_context),
-            ("actionFormat", self.format),
-            ("actionManual", self.manual),
         ]
     }
 }
 
-/// The default marker, named by preset or written out as the marker itself.
-fn resolve_skip_ci_default(presets: &[SkipCiPreset], name_or_marker: &str) -> String {
-    let wanted = name_or_marker.trim();
-    if wanted.is_empty() {
-        return presets
-            .first()
-            .map(|preset| preset.marker.clone())
-            .unwrap_or_default();
-    }
-    presets
-        .iter()
-        .find(|preset| preset.name == wanted || preset.marker == wanted)
-        .map(|preset| preset.marker.clone())
-        .unwrap_or_else(|| wanted.to_owned())
-}
-
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// The active model profile, or the single LLM settings when none is
-    /// selected: every request reads only these resolved values.
     pub provider: Provider,
     pub protocol: Protocol,
     pub base_url: String,
@@ -475,44 +310,23 @@ pub struct Config {
     pub temperature: f64,
     pub send_temperature: bool,
     pub max_tokens: u32,
-    /// Which declared plugin secret the request carries.
-    pub secret_slot: String,
     /// The language written into the prompt (checklist 29).
     pub language: String,
     pub max_diff_chars: usize,
     pub commit_types: Vec<CommitType>,
-    /// The selected prompt profile's text, or the single extra system prompt.
+    /// The extra system prompt.
     pub extra_prompt: String,
     /// The selected output template; `None` is the built-in Default.
     pub template: Option<String>,
     /// Thinking level, parameter preset and optional custom mapping.
     pub thinking: thinking::Settings,
-    /// What the manual structured editor shows (checklists 16–18).
-    pub editor: EditorSettings,
 }
 
 impl Config {
     pub fn load() -> Self {
-        let model = selected("modelProfiles", "activeModel");
-        let provider = Provider::parse(profile_text(model.as_ref(), "provider").as_deref());
-        let protocol = Protocol::parse(profile_text(model.as_ref(), "protocol").as_deref())
+        let provider = Provider::parse(host::setting_string("provider").as_deref());
+        let protocol = Protocol::parse(host::setting_string("protocol").as_deref())
             .unwrap_or_else(|| provider.default_protocol());
-
-        let prompt = selected("promptProfiles", "defaultPrompt");
-        let presets = skip_ci_presets();
-        let extra_prompt = match prompt.as_ref() {
-            Some(profile) => profile
-                .get("text")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .trim()
-                .to_owned(),
-            // No profile selected: the 0.6.x single extra prompt still works.
-            None => host::setting_string("extraPrompt")
-                .unwrap_or_default()
-                .trim()
-                .to_owned(),
-        };
         // 'Default' is the built-in template. A table row with that name must
         // not shadow it, which is how the built-in stays protected.
         let default_template = host::setting_string("defaultTemplate").unwrap_or_default();
@@ -530,58 +344,38 @@ impl Config {
         Self {
             provider,
             protocol,
-            base_url: profile_text(model.as_ref(), "baseUrl")
+            base_url: host::setting_string("baseUrl")
                 .unwrap_or_default()
                 .trim()
                 .to_owned(),
-            model: profile_text(model.as_ref(), "model")
+            model: host::setting_string("model")
                 .unwrap_or_default()
                 .trim()
                 .to_owned(),
-            temperature: profile_number(model.as_ref(), "temperature")
+            temperature: host::setting_number("temperature")
                 .unwrap_or(0.5)
                 .clamp(0.0, 2.0),
-            send_temperature: profile_bool(model.as_ref(), "sendTemperature").unwrap_or(true),
-            max_tokens: profile_number(model.as_ref(), "maxTokens")
+            send_temperature: host::setting_bool("sendTemperature").unwrap_or(true),
+            max_tokens: host::setting_number("maxTokens")
                 .unwrap_or(64_000.0)
                 .clamp(256.0, 128_000.0) as u32,
-            secret_slot: secret_slot(model.as_ref()),
             language: prompt_language(host::setting_string("language").as_deref()),
             max_diff_chars: host::setting_number("maxDiffChars")
                 .unwrap_or(12_000.0)
                 .clamp(2_000.0, 200_000.0) as usize,
             commit_types: commit_types(),
-            extra_prompt,
+            extra_prompt: host::setting_string("extraPrompt")
+                .unwrap_or_default()
+                .trim()
+                .to_owned(),
             template,
             thinking: thinking::Settings {
-                level: thinking::Level::parse(
-                    profile_text(model.as_ref(), "thinkingLevel").as_deref(),
-                ),
-                preset: thinking::Preset::parse(
-                    profile_text(model.as_ref(), "thinkingPreset").as_deref(),
-                ),
-                // A blank column means "use the preset template".
-                mapping: profile_text(model.as_ref(), "thinkingMapping")
+                level: thinking::Level::parse(host::setting_string("thinkingLevel").as_deref()),
+                preset: thinking::Preset::parse(host::setting_string("thinkingPreset").as_deref()),
+                // A blank mapping means "use the preset template".
+                mapping: host::setting_string("thinkingMapping")
                     .map(|text| text.trim().to_owned())
                     .filter(|text| !text.is_empty()),
-            },
-            editor: EditorSettings {
-                show_type: host::setting_bool("editorShowType").unwrap_or(true),
-                show_scope: host::setting_bool("editorShowScope").unwrap_or(true),
-                show_body: host::setting_bool("editorShowBody").unwrap_or(true),
-                show_changes: host::setting_bool("editorShowChanges").unwrap_or(true),
-                show_closes: host::setting_bool("editorShowCloses").unwrap_or(true),
-                show_skip_ci: host::setting_bool("editorShowSkipCi").unwrap_or(true),
-                type_style: TypeStyle::parse(host::setting_string("editorTypeStyle").as_deref()),
-                common_types: host::setting_number("editorCommonTypes")
-                    .unwrap_or(3.0)
-                    .clamp(0.0, 100.0) as usize,
-                skip_ci_presets: presets.clone(),
-                skip_ci_default: resolve_skip_ci_default(
-                    &presets,
-                    &host::setting_string("skipCiDefault").unwrap_or_default(),
-                ),
-                skip_ci_checked: host::setting_bool("skipCiDefaultChecked").unwrap_or(false),
             },
         }
     }
@@ -623,7 +417,6 @@ mod tests {
         assert_eq!(config.commit_types.len(), 11);
         assert_eq!(config.commit_types[0].title, "feat");
         assert_eq!(config.commit_types[0].description, "A new feature");
-        assert_eq!(config.secret_slot, "api-key");
         assert_eq!(config.template, None);
     }
 
@@ -693,48 +486,36 @@ mod tests {
         );
     }
 
+    /// Model and prompt profiles were removed: rows an earlier version saved
+    /// are ignored, and the single settings drive the request.
     #[test]
-    fn the_active_model_profile_overrides_the_single_settings() {
+    fn saved_profiles_no_longer_override_the_single_settings() {
         let host = MockHost::install();
+        host.set_setting("provider", "\"Magpie\"");
+        host.set_setting("model", "\"single-model\"");
+        host.set_setting("temperature", "0.5");
+        host.set_setting("thinkingLevel", "\"LOW\"");
+        host.set_setting("extraPrompt", "\"single prompt\"");
         host.set_setting(
             "modelProfiles",
-            r#"[{"name":"Work","provider":"Custom","protocol":"openai-responses","baseUrl":"https://llm.example.com/v1","model":"work-model","temperature":0.1,"sendTemperature":false,"maxTokens":2048,"secretSlot":"api-key-3"}]"#,
+            r#"[{"name":"Work","provider":"Custom","protocol":"openai-responses","baseUrl":"https://llm.example.com/v1","model":"work-model","temperature":0.1,"sendTemperature":false,"maxTokens":2048,"secretSlot":"api-key-3","thinkingLevel":"HIGH"}]"#,
         );
         host.set_setting("activeModel", "\"Work\"");
-        let config = Config::load();
-        assert_eq!(config.protocol, Protocol::OpenAiResponses);
-        assert_eq!(config.effective_base_url(), "https://llm.example.com/v1");
-        assert_eq!(config.effective_model(), "work-model");
-        assert_eq!(config.max_tokens, 2048);
-        assert_eq!(config.temperature, 0.1);
-        assert!(!config.send_temperature);
-        assert_eq!(config.secret_slot, "api-key-3");
-    }
-
-    #[test]
-    fn an_unknown_key_slot_cannot_leave_the_declared_set() {
-        let host = MockHost::install();
-        host.set_setting(
-            "modelProfiles",
-            r#"[{"name":"Work","provider":"Custom","secretSlot":"{{secret:anything}}"}]"#,
-        );
-        host.set_setting("activeModel", "\"Work\"");
-        assert_eq!(Config::load().secret_slot, "api-key");
-    }
-
-    #[test]
-    fn a_selected_prompt_profile_replaces_the_single_extra_prompt() {
-        let host = MockHost::install();
-        host.set_setting("extraPrompt", "\"old single prompt\"");
         host.set_setting(
             "promptProfiles",
             r#"[{"name":"Team","text":"Team writing preferences"}]"#,
         );
         host.set_setting("defaultPrompt", "\"Team\"");
-        assert_eq!(Config::load().extra_prompt, "Team writing preferences");
 
-        host.set_setting("defaultPrompt", "\"Missing\"");
-        assert_eq!(Config::load().extra_prompt, "old single prompt");
+        let config = Config::load();
+        assert_eq!(config.provider, Provider::Magpie);
+        assert_eq!(config.effective_base_url(), "http://127.0.0.1:3425");
+        assert_eq!(config.effective_model(), "single-model");
+        assert_eq!(config.temperature, 0.5);
+        assert!(config.send_temperature);
+        assert_eq!(config.max_tokens, 64_000);
+        assert_eq!(config.thinking.level, thinking::Level::Low);
+        assert_eq!(config.extra_prompt, "single prompt");
     }
 
     #[test]
@@ -757,7 +538,7 @@ mod tests {
     }
 
     #[test]
-    fn the_active_profile_carries_its_thinking_settings() {
+    fn reads_the_thinking_settings() {
         let host = MockHost::install();
         host.set_setting("thinkingLevel", "\"LOW\"");
         host.set_setting("thinkingPreset", "\"nested-effort\"");
@@ -768,21 +549,6 @@ mod tests {
             thinking::Preset::NestedEffort
         );
         assert_eq!(Config::load().thinking.mapping, None);
-
-        host.set_setting(
-            "modelProfiles",
-            r#"[{"name":"Reasoner","thinkingLevel":"HIGH","thinkingPreset":"custom","thinkingMapping":"{\"HIGH\":{\"reasoning_effort\":\"high\"}}"}]"#,
-        );
-        host.set_setting("activeModel", "\"Reasoner\"");
-        assert_eq!(Config::load().thinking.level, thinking::Level::High);
-        assert_eq!(Config::load().thinking.preset, thinking::Preset::Custom);
-        assert!(
-            Config::load()
-                .thinking
-                .mapping
-                .unwrap()
-                .contains("reasoning_effort")
-        );
     }
 
     #[test]

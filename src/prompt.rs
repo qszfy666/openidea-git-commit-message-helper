@@ -39,8 +39,6 @@ pub enum Task<'a> {
     /// Write the fields, following requirements the author typed for this
     /// commit (business background, a bug report, an issue, Skip CI).
     Requirements(&'a str),
-    /// Rewrite the draft message already in the commit field into the fields.
-    Format(&'a str),
 }
 
 const ANALYSIS_INSTRUCTIONS: &str = "Internal Analysis Instructions (do not output this analysis):\n\
@@ -102,14 +100,7 @@ pub fn build_prompts(config: &Config, context: &GitContext, task: Task<'_>) -> (
         Task::Requirements(_) => {
             "Generate git commit fields for this project, including the author's additional requirements."
         }
-        Task::Format(_) => {
-            "Rewrite the draft commit message below as git commit fields for this project."
-        }
     };
-    let mut contract = output_contract(config, language);
-    if let Task::Format(_) = task {
-        contract.push_str("\n\nRewrite rules: keep every fact the draft states (the change, its scope, issue numbers, breaking changes); fix the type, the subject shape, the body bullets and the language. Use the diff only to correct the draft, not to add changes it does not describe.");
-    }
 
     let status = if context.status_lines.is_empty() {
         "(none)".to_owned()
@@ -125,17 +116,13 @@ pub fn build_prompts(config: &Config, context: &GitContext, task: Task<'_>) -> (
     let mut sections = vec![
         preamble.to_owned(),
         ANALYSIS_INSTRUCTIONS.to_owned(),
-        contract,
+        output_contract(config, language),
     ];
     match task {
         Task::Generate => {}
         Task::Requirements(requirements) => sections.push(format!(
             "Author's Additional Requirements (written for this commit; follow them unless they contradict the diff or the JSON contract):\n{}",
             requirements.trim()
-        )),
-        Task::Format(message) => sections.push(format!(
-            "Existing Draft Commit Message (preserve its meaning, details and language):\n{}",
-            message.trim()
         )),
     }
     sections.push(format!("Repository Root:\n{}", context.root));
@@ -683,33 +670,6 @@ pub fn render(fields: &CommitFields) -> String {
     render_template(fields, DEFAULT_TEMPLATE).expect("the built-in template is valid")
 }
 
-/// The fields the template preview lets the user switch on and off.
-pub const EXAMPLE_FIELDS: [&str; 7] = [
-    "type", "scope", "subject", "body", "changes", "closes", "skipCi",
-];
-
-/// Example values for a preview: a selected field gets a visible placeholder,
-/// an unselected one stays empty so its conditional section is skipped.
-/// `header` is derived from `type` and `subject` by the renderer.
-pub fn example_fields(selected: &[String]) -> CommitFields {
-    let value = |name: &str| {
-        if selected.iter().any(|key| key == name) {
-            format!("<{name}>")
-        } else {
-            String::new()
-        }
-    };
-    CommitFields {
-        commit_type: value("type"),
-        scope: value("scope"),
-        subject: value("subject"),
-        body: value("body"),
-        changes: value("changes"),
-        closes: value("closes"),
-        skip_ci: value("skipCi"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -792,22 +752,6 @@ mod tests {
         );
         assert!(user.contains("closes #42; the crash came from an empty queue"));
         assert!(user.contains("Additional Requirements"));
-        assert!(!user.contains("Existing Draft Commit Message"));
-    }
-
-    #[test]
-    fn prompt_asks_to_rewrite_an_existing_draft() {
-        let _host = openidea_plugin::mock::MockHost::install();
-        let config = Config::load();
-        let (_, user) = build_prompts(
-            &config,
-            &sample_context(),
-            Task::Format("fixed stuff and closes #7"),
-        );
-        assert!(user.contains("Existing Draft Commit Message"));
-        assert!(user.contains("fixed stuff and closes #7"));
-        assert!(user.contains("Rewrite rules"));
-        assert!(!user.contains("Additional Requirements"));
     }
 
     #[test]
@@ -903,17 +847,6 @@ mod tests {
                 .unwrap_err()
                 .contains("unclosed")
         );
-    }
-
-    #[test]
-    fn example_fields_only_fill_the_selected_ones() {
-        let fields = example_fields(&["type".into(), "subject".into(), "body".into()]);
-        assert_eq!(
-            render_template(&fields, DEFAULT_TEMPLATE).unwrap(),
-            "<type>: <subject>\n\n<body>"
-        );
-        assert!(fields.scope.is_empty());
-        assert!(fields.closes.is_empty());
     }
 
     #[test]

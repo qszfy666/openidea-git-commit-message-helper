@@ -7,9 +7,9 @@ OpenIDEA 0.1.40（`openidea:plugin@1.4.0`）已经提供原生提交工作流：
 - `[[contributes.menus]] menu = "commit.message"`：在 Commit 工具窗和 Commit 对话框的提交信息上方显示插件命令按钮；API 1.4 允许命令各自声明 `icon`；
 - `host::pending_commit()`：返回当前窗口正在准备的提交，包括实际包含的文件、部分 hunk 的 diff、`amend` 和消息草稿；
 - `host::set_commit_message(revision, text)`：把生成结果写入原生提交信息框，并按 `revision` 防止覆盖用户后来输入的内容；
-- `Project::vcs_log()`、`ui.input-multiline`、`ui.pick` 与 `clipboard`：最近提交风格参考、附加要求输入、模型列表选择和复制。
+- `Project::vcs_log()` 与 `ui.input-multiline`：最近提交风格参考、附加要求输入。
 
-因此插件不再需要自己的 Tool Window、文件勾选清单、剪贴板复制，也不再需要 `process:git`。插件从「工具窗 + 复制粘贴」改为「原生提交面板按钮 + 一键填入」；工具栏上的四个按钮分别对应生成、带附加要求生成、草稿格式化和手动编辑（打开字段列表弹框）；按钮各自可隐藏。
+因此插件不再需要自己的 Tool Window、文件勾选清单、剪贴板复制，也不再需要 `process:git`。插件从「工具窗 + 复制粘贴」改为「原生提交面板按钮 + 一键填入」；工具栏上的两个按钮分别对应生成和带附加要求生成；按钮各自可隐藏。
 
 ## 2. 架构
 
@@ -24,25 +24,23 @@ OpenIDEA Commit 工具窗 / Commit 对话框
         ├─ Project::vcs_status()（仓库根目录、分支）
         ├─ Project::vcs_log()（最近五条提交标题，风格参考）
         │
-        └─ WASM 插件（Rust SDK 1.4）
+        └─ WASM 插件（Rust SDK 1.5）
               ├─ git.rs    从 CommitDraft 构建 prompt 上下文，裁剪 diff，读取历史标题
-              ├─ prompt.rs   三种任务的 prompt + JSON 字段契约 + 模板渲染（内置 Default 与命名模板）
+              ├─ prompt.rs   两种任务的 prompt + JSON 字段契约 + 模板渲染（内置 Default 与命名模板）
               ├─ thinking.rs 思考等级、预设映射、校验、等级收敛与 token budget
-              ├─ llm.rs      host::fetch → 三种协议、模型列表、兼容重试、请求诊断、密钥槽
-              ├─ config.rs   设置、服务商预设、命名档案解析、项目层选择、编辑器与按钮设置
-              ├─ editor.rs   手动结构化编辑器（视图）：七个字段的表单、本地渲染写回、按项目草稿
+              ├─ llm.rs      host::fetch → 三种协议、兼容重试、请求诊断
+              ├─ config.rs   设置、服务商预设、所选模板、按钮设置
               ├─ ui.rs       中英日韩四份通知与对话框文案（宿主文案目录只覆盖声明式文本）
-              └─ lib.rs      命令入口：generate / generate-with-context / format / manual / models /
-                           endpoint / test / template-preview / template-help / template-default /
-                           thinking-levels / thinking-help；以及 views 导出、动作显隐的 context key
+              └─ lib.rs      命令入口：generate / generate-with-context / test /
+                           template-help / template-default；
+                           以及动作显隐的 context key
 ```
 
 两条并行的入口：
 
 - **生成路径**：提交面板按钮 → prompt → `host::fetch` → 解析 → 本地渲染 → `set_commit_message`。
-- **手动路径**（清单 3）：`host::pick` 字段列表 → 选中字段用各自的 `pick` / `input` / `input_multiline` 编辑并写入插件状态 → `Write to commit message` → 本地渲染 → `set_commit_message`，与生成共用同一 `revision` 保护。
 
-插件状态只有两处持久化，都用 `host::storage`（`storage` 能力，64 MiB 上限，卸载时删除）：按项目保存的编辑器草稿（键 `editor:<项目根>`）和按端点/模型/协议/思考映射/温度配置保存的兼容结果缓存（键 `compat:<hash>`）。宿主会在空闲 5 分钟后回收 WASM 实例，因此这两份状态不能只放在内存里。
+插件状态只有一处持久化，用 `host::storage`（`storage` 能力，64 MiB 上限，卸载时删除）：按端点/模型/协议/思考映射/温度配置保存的兼容结果缓存（键 `compat:<hash>`）。宿主会在空闲 5 分钟后回收 WASM 实例，因此这份状态不能只放在内存里。
 
 ## 3. 数据采集
 
@@ -64,32 +62,24 @@ OpenIDEA Commit 工具窗 / Commit 对话框
 | OpenAI Responses | `{base}/responses` | `Authorization: Bearer` |
 | Anthropic Messages | `{base}/v1/messages` | `x-api-key` + `anthropic-version` |
 
-Base URL 留空时使用 provider 预设；有路径时直接追加协议后缀，只有主机名时补 `/v1`。API Key 是插件 secret，由 IDE 在发出请求时填入，插件代码读不到。
+Base URL 留空时使用 provider 预设；有路径时直接追加协议后缀，只有主机名时补 `/v1`。API Key 是插件 secret `api-key`，请求头写 `{{secret:api-key}}`，由 IDE 在发出请求时从钥匙串填入，插件代码读不到。
 
 设置使用插件 API 1.3 的声明式多页设置：
 
 - **Commit**：提交信息语言（`auto` 跟随 IDE 界面语言）、最大 diff 字符数、允许的提交类型（标题＋描述表格）；
-- **Prompts**：额外系统提示词、提示词档案表格与默认选择；
-- **Commit Templates**：输出模板档案表格与默认选择；**Preview**（编辑模板并切换示例字段查看渲染结果）、**Variables**（变量说明、示例与错误）、**Restore Default**（复制内置模板供粘贴）三个动作。
-- **LLM Settings**：Provider、协议、Base URL、Model、Temperature、**Send temperature**、Max response tokens、Thinking 组（等级、预设、自定义映射）、模型档案表格与活动档案选择；页面的 **Test**、**Models**、**Request URL**、**Thinking Levels**、**Thinking Help** 五个动作都会先应用待保存设置。**Test** 发起一次最小请求并给出诊断摘要，**Models** 请求 `GET {base}/models` 后选择并把 id 复制到剪贴板（声明式设置对插件只读，用户自行粘贴到 Model），**Request URL** 显示按 Base URL 和协议拼接出的实际请求地址。**Thinking Levels** 显示当前映射实际提供的等级，**Thinking Help** 显示映射规则、当前校验结果并复制预设模板。
+- **Prompts**：额外系统提示词；
+- **Commit Templates**：输出模板表格与默认选择；**Variables**（变量说明、示例与错误）、**Restore Default**（复制内置模板供粘贴）两个动作。
+- **LLM Settings**：Provider、协议、Base URL、Model、Temperature、**Send temperature**、Max response tokens、Thinking 组（等级、预设、自定义映射）；页面只有 **Test** 一个动作，先应用待保存设置，再发起一次最小请求并给出诊断摘要。设置页只在按钮下方显示命令错误，成功结果只走通知；设置窗口不显示插件通知，所以插件的通知都用 `Project::notify`（API 1.5）发到项目主窗口，没有项目时才发给触发窗口。Model 是文本框：0.1.41 的设置项只支持 schema 里写死的 `enum`，插件也不能写设置，所以做不成从端点拉取的下拉框。
 
-### 4.2 命名档案与项目默认（0.7.0）
+### 4.2 输出模板与项目默认（0.7.0）
 
-三种档案都用声明式表格（`array` of `object`）保存，单元格只支持标量，长文本列声明 `multiline` 后由宿主渲染为多行输入框。插件对设置只读，所以档案的新建、改名、编辑、复制、删除与排序都由 IDE 设置界面完成。复制操作与旧表格数据升级需要应用随仓库提供的 [OpenIDEA 宿主补丁](patches/openidea-0.1.40-plugin-settings.patch)，应用说明见迁移清单的验收修复记录。
+输出模板用声明式表格 `templates`（`array` of `object`）保存，单元格只支持标量，模板列声明 `multiline` 后由宿主渲染为多行输入框。插件对设置只读，所以模板的新建、改名、编辑、复制、删除与排序都由 IDE 设置界面完成。`defaultTemplate` 选择用哪一行，留空或名字不匹配时用内置 **Default** 模板。复制操作与旧表格数据升级需要应用随仓库提供的 [OpenIDEA 宿主补丁](patches/openidea-0.1.40-plugin-settings.patch)，应用说明见迁移清单的验收修复记录。
 
-| 档案 | 表格键 | 选择键 | 未选择时的回退 |
-| --- | --- | --- | --- |
-| 模型 | `modelProfiles` | `activeModel` | LLM Settings 原有的单份设置 |
-| 提示词 | `promptProfiles` | `defaultPrompt` | 原有的 `extraPrompt` |
-| 输出模板 | `templates` | `defaultTemplate` | 内置的 **Default** 模板 |
+`defaultTemplate` 是普通设置键，宿主按 project over global 解析：项目层有值就用项目值，项目里留空即继承全局选择；表格本身也按同一规则分层，不合并两层（清单第 10、14 项）。
 
-`Config::load()` 把选中档案解析成一组扁平的最终值，之后 `llm.rs`、`prompt.rs` 只读这些值；三个页面动作读取的也是活动模型档案。选择键或名字不匹配时直接回退，0.6.x 的设置不需要迁移。
+0.7.0 引入的模型档案（`modelProfiles` / `activeModel`）、提示词档案（`promptProfiles` / `defaultPrompt`）和密钥槽 `api-key-2`～`api-key-4` 已移除，连接、思考参数和额外提示词都只读单项设置；旧版本存下的档案值不再读取。
 
-选择键是普通设置键，宿主按 project over global 解析：项目层有值就用项目值，项目里留空即继承全局选择；表格本身也按同一规则分层，不合并两层档案库（清单第 10、14 项）。
-
-密钥不能写进表格。manifest 静态预声明四个密钥槽（`api-key`、`api-key-2`、`api-key-3`、`api-key-4`），模型档案在 **Key slot** 列用 enum 选一个，请求头写 `{{secret:<slot>}}` 由宿主从钥匙串填充。槽名在进入处校验，非法值回退 `api-key`；只检查活动档案对应的槽是否填写（清单第 20 项）。
-
-网络白名单通过 `plugin.toml` 的 optional `net:` 能力声明；内置 OpenAI、Anthropic、DeepSeek、Qwen、Kimi、GLM、MiniMax、SiliconFlow、Volcengine、Azure OpenAI、OpenRouter、Groq、Mistral、Google Gemini、`127.0.0.1`（Magpie）与 `localhost`（Ollama）。`clipboard` 也是可选能力，只用于复制选中的模型 id。Magpie 示例：`provider = Magpie`、`baseUrl = http://127.0.0.1:3425`、`model = <Magpie 模型 id>`。
+网络白名单通过 `plugin.toml` 的 optional `net:` 能力声明；内置 OpenAI、Anthropic、DeepSeek、Qwen、Kimi、GLM、MiniMax、SiliconFlow、Volcengine、Azure OpenAI、OpenRouter、Groq、Mistral、Google Gemini、`127.0.0.1`（Magpie）与 `localhost`（Ollama）。可选的 `net:ask`（API 1.5）覆盖列表以外的 HTTPS 主机：命令第一次连接某个主机时宿主弹框询问，用户逐个允许或拒绝；后台调用不询问，非 loopback 的明文 HTTP 仍被拒绝。`clipboard` 也是可选能力，只用于 **Restore Default** 复制内置模板。Magpie 示例：`provider = Magpie`、`baseUrl = http://127.0.0.1:3425`、`model = <Magpie 模型 id>`。
 
 ### 4.1 参数兼容、预算与诊断
 
@@ -105,15 +95,15 @@ Base URL 留空时使用 provider 预设；有路径时直接追加协议后缀�
 
 ### 4.3 思考参数（0.7.1）
 
-每个模型档案（或单份设置）有一组 Thinking 值：等级 `DEFAULT / DISABLED / ENABLED / LOW / MEDIUM / HIGH / MAX`、预设 `model-default / auto / openai-effort / nested-effort / thinking-object / enable-thinking / anthropic-budget / anthropic-adaptive / custom`，以及可选的自定义映射。`DEFAULT` 或 `model-default` 不发送任何思考参数，0.7.0 的请求形态保持不变。
+LLM Settings 有一组 Thinking 值：等级 `DEFAULT / DISABLED / ENABLED / LOW / MEDIUM / HIGH / MAX`、预设 `model-default / auto / openai-effort / nested-effort / thinking-object / enable-thinking / anthropic-budget / anthropic-adaptive / custom`，以及可选的自定义映射。`DEFAULT` 或 `model-default` 不发送任何思考参数，0.7.0 的请求形态保持不变。
 
-预设是一个按等级名作键的 JSON 对象，每个值是一段请求体片段，生成请求时合并到顶层字段。`auto` 按档案协议选标准参数（Chat Completions 用 `reasoning_effort`，Responses 用 `reasoning.effort`，Anthropic 用 `thinking` 对象加预算占位符）；其余预设对应 `reasoning_effort`、嵌套 effort、`thinking` 开关、`enable_thinking` 布尔值、Anthropic budget / adaptive 等参数族。`auto` 的 `MAX` 映射为 `high`，需要 `max` / `xhigh` 的网关写自定义映射。这里不做参考项目按供应商名猜测参数族的启发式：映射是请求片段，不是能力探测。
+预设是一个按等级名作键的 JSON 对象，每个值是一段请求体片段，生成请求时合并到顶层字段。`auto` 按所配协议选标准参数（Chat Completions 用 `reasoning_effort`，Responses 用 `reasoning.effort`，Anthropic 用 `thinking` 对象加预算占位符）；其余预设对应 `reasoning_effort`、嵌套 effort、`thinking` 开关、`enable_thinking` 布尔值、Anthropic budget / adaptive 等参数族。`auto` 的 `MAX` 映射为 `high`，需要 `max` / `xhigh` 的网关写自定义映射。这里不做参考项目按供应商名猜测参数族的启发式：映射是请求片段，不是能力探测。
 
 `thinkingMapping` 列非空时覆盖预设模板，清空即恢复。进入处校验 JSON 对象、等级名、隐式 `DEFAULT`、空片段、null、保留请求字段（`model`、`messages`、`temperature`、各 token 字段等）、`$thinking_budget` 只能出现在 `thinking.budget_tokens`、嵌套不超过 12 层、大小不超过 64 KiB。`thinking.budget_tokens` 的占位符按等级占响应上限的 25/50/75/90%，预留 256 token 给答案；显式数字需不小于 1024 且小于上限，上限不足时该等级不可用。
 
-占位符位置按真实 JSON 路径片段判断。预算型思考的 **Test** 使用活动档案的响应上限，与生成时发送的预算一致；其他连接探针使用 16 token。模板渲染结果为空或只有空白时，生成流程会回退内置 Default 并报告模板错误。
+占位符位置按真实 JSON 路径片段判断。预算型思考的 **Test** 使用设置里的响应上限，与生成时发送的预算一致；其他连接探针使用 16 token。模板渲染结果为空或只有空白时，生成流程会回退内置 Default 并报告模板错误。
 
-声明式表格的 enum 无法条件化，因此 **Thinking Levels** 动作显示映射实际提供的等级；插件在解析时收敛：等级没有映射、映射无效或 budget 不通过时按 Model default 发送，并在诊断里写明原因。请求诊断也显示实际发送的片段或未发送的原因。被服务端明确拒绝思考字段时直接报告失败，移除重试（第 38 项）和拒绝结果缓存（第 39 项）不在本批。
+插件在解析时收敛：等级没有映射、映射无效或 budget 不通过时按 Model default 发送，并在诊断里写明原因。请求诊断也显示实际发送的片段或未发送的原因。被服务端明确拒绝思考字段时直接报告失败，移除重试（第 38 项）和拒绝结果缓存（第 39 项）不在本批。
 
 ## 5. 输出格式
 
@@ -140,25 +130,21 @@ Closes #123
 
 0.7.0 起最终格式可由命名模板覆盖。变量为 `{{type}}`、`{{scope}}`、`{{subject}}`、`{{body}}`、`{{changes}}`、`{{closes}}`、`{{skipCi}}` 与 `{{header}}`（即 `type(scope): subject`）；条件段 `{{#field}}…{{/field}}` 只在该字段非空时输出，因此字段顺序、分隔符、可选段落和 footer 都由模板决定，静态文本原样保留。内置 `DEFAULT_TEMPLATE` 与旧的本地渲染等价，且不作为表格行存在，同名行无法覆盖它。模板解析遇到未知变量、嵌套段或未闭合段时返回错误，生成流程回退内置 Default 并在通知里说明，不会丢掉模型结果。完整 Velocity 兼容（清单第 46 项）单独评估。
 
-Commit Templates 页的 **Preview** 用 `pick_many` 选择哪些示例字段有值，再用多行输入框编辑模板：确认即渲染，可反复修改，取消结束；模板错误在预览里直接显示。**Variables** 给出变量、条件段、示例、错误类型和恢复入口，**Restore Default** 把内置模板复制到剪贴板（未授权剪贴板时在通知里显示）。宿主表格没有编辑事件，插件也不能写设置值，所以预览不是设置页内的随改随刷，恢复需要用户粘贴或清空 **Default template**。
+Commit Templates 页的 **Variables** 给出变量、条件段、示例、错误类型和恢复入口，**Restore Default** 把内置模板复制到剪贴板（未授权剪贴板时在通知里显示）。插件不能写设置值，恢复需要用户粘贴或清空 **Default template**。原来的 **Preview** 已移除：它要弹选择框和输入框，而设置窗口不显示插件对话框，宿主等回答又没有超时，会让插件后续的命令一直排队。
 
 ## 6. 交互流程
 
 1. 用户打开 Commit 工具窗或 Commit 对话框，勾选本次要提交的文件/变更块。
-2. 点击工具栏上的四个按钮之一（或用 Find Action / `⌥⌘G` 调用生成）：
+2. 点击工具栏上的两个按钮之一（或用 Find Action / `⌥⌘G` 调用生成）：
    - **Generate Commit Message**：只用所选变更生成；
-   - **Generate Commit Message with Requirements**：先用 `ui.input-multiline` 填写本次的业务背景、Bug 说明、issue 或 Skip CI 要求，取消或留空则不发请求，填写内容只进入这一次的 user prompt；
-   - **Format Commit Message**：把提交框里已有的草稿连同所选 diff 交给模型，要求保留事实并重写为规范字段；草稿为空时直接提示，不发请求；
-   - **Edit Commit Message Fields**：打开手动编辑器视图，不调用模型（见下方手动编辑路径）。
-3. 插件在后台任务中调用 `pending_commit()`，按任务类型构建 prompt 并请求 LLM；同时如果提交信息框为空，先写入「正在生成提交信息…」作为执行中的可见反馈（1.4 仍没有按钮旁的 spinner，也没有输入框占位符 API），失败或取消时清掉，用户中途输入过则不动。
+   - **Generate Commit Message with Requirements**：先用 `ui.input-multiline` 填写本次的业务背景、Bug 说明、issue 或 Skip CI 要求，取消或留空则不发请求，填写内容只进入这一次的 user prompt。
+3. 插件在后台任务中调用 `pending_commit()`，按任务类型构建 prompt 并请求 LLM；同时先把提交信息框换成「正在生成提交信息…」作为执行中的可见反馈（框里原来有字也换），失败或取消时恢复原来的文字，用户中途输入过则不动。
 4. 模型返回后，插件解析并渲染 Conventional Commit 文本，再调用 `set_commit_message(draft.revision, message)`；通知里附上本次请求诊断。
 5. 用户在原生提交框里检查/修改后手动提交；插件不会自动提交。
 
 如果生成期间用户修改了消息或勾选内容，`draft.revision` 已变化，`set_commit_message` 返回 `Error::Stale`，插件只提示「提交面板内容已变化」，不覆盖当前文本。
 
-手动编辑路径（清单 3）：提交信息上方的 **Edit Commit Message Fields** 按钮用 `host::pick` 打开居中的字段列表弹框，每行是一个字段（type / scope / subject / body / breaking change / closes / Skip CI）及其当前值，末尾是 `Write to commit message` 和 `Clear all fields`。API 1.4 没有多字段弹框，所以选中字段后在各自的弹框里编辑：类型和 Skip CI 用列表选择（Skip CI 含「不写入标记」），scope、subject、closes 用单行输入，正文和破坏性变更用多行输入，确认后回到列表。列表内容由 `Commit` 设置页决定：六个显隐开关、类型排序（表格顺序或常用置顶）、Skip CI 标记表格与默认值。每次字段变更都写入 `storage`，按 Git 仓库根区分草稿；关闭列表（取消或 Esc）保留草稿，单个字段弹框取消则该字段不变。`Write to commit message` 先按生成路径的同一标题约束校验，再读取 `pending_commit()` 的当前 `revision`，替换已有提交信息；校验失败或读取后草稿变化则不写入，列表重新出现并以原因作为标题；成功或清空后删除草稿。类型只能从列表选择，所以「单选列表 / 混合样式」不可用，类型样式部分只完成排序与数量。
-
-提交信息上方的四个按钮（生成 / 带附加要求生成 / 格式化 / 手动编辑）各自有独立 `when`：`activation = ["on-startup-finished"]` 与 `settings-changed` 事件时，插件把 `Buttons` 设置写成 `plugin.<id>.<action*>` context key，`plugin.toml` 的菜单 `when` 读取同名键，命令自身仅要求仓库可用，因此按钮隐藏后仍可从 Find Action 和快捷键运行。启动即写是为了避免「按钮隐藏后插件永不激活」的死锁。
+提交信息上方的两个按钮（生成 / 带附加要求生成）各自有独立 `when`：`activation = ["on-startup-finished"]` 与 `settings-changed` 事件时，插件把 `Buttons` 设置写成 `plugin.<id>.<action*>` context key，`plugin.toml` 的菜单 `when` 读取同名键，命令自身仅要求仓库可用，因此按钮隐藏后仍可从 Find Action 和快捷键运行。启动即写是为了避免「按钮隐藏后插件永不激活」的死锁。
 
 ## 7. 已知限制
 
@@ -166,11 +152,10 @@ Commit Templates 页的 **Preview** 用 `pick_many` 选择哪些示例字段有�
 2. 单次命令受宿主 60 秒后台任务上限约束；插件把首次请求和兼容重试放进共享的 50 秒预算，单次请求超时随剩余时间递减且不低于 8 秒。无流式输出。
 3. `pending_commit` / `set_commit_message` 只适用于可信项目，且必须从某个窗口的 command/event 调用。
 4. 多仓库项目会在 `changes` 中返回多个仓库的文件；分支与最近提交来自当前项目对应的仓库状态。
-5. 插件设置是 IDE 声明的多页设置，不支持任意 Web 设置页或条件字段，插件也不能写入设置值：模型列表选择通过剪贴板转交用户；档案管理由声明式表格完成，表格列只支持标量、不支持嵌套集合。四个密钥槽是 manifest 静态声明的上限，档案数量不受此限，但只有四个可独立密钥。模板预览与思考映射等条件界面（清单 11、12、26、27）改用设置页命令动作：预览是「编辑 → 确认 → 看结果」的循环而不是表格内的随改随刷，等级收敛由 **Thinking Levels** 动作显示而不是动态枚举。
+5. 插件设置是 IDE 声明的多页设置，不支持任意 Web 设置页、条件字段或由插件提供的下拉选项，插件也不能写入设置值，所以 Model 只能手动填写；模板表格列只支持标量、不支持嵌套集合。设置窗口既不显示插件通知也不显示插件对话框，设置页动作的结果改发到项目主窗口，需要对话框的动作不放在设置页。思考等级不在映射里时按 Model default 发送，由请求诊断说明，没有单独的查看入口。
 6. 诊断摘要列出 token 字段、温度、尝试次数、兼容调整、缓存命中，以及实际发送或省略的思考参数（24–28、39、40 项）。
 7. 思考参数被服务端以 4xx 明确拒绝时直接报告失败，不做移除重试，也不缓存该拒绝（38 项仍未实现）；缓存只覆盖 token 字段与 temperature。首次请求与既有兼容重试仍共享 50 秒预算，重试次数未改变。
-8. 手动编辑器受 API 1.4 限制：没有多字段弹框，字段只能逐个编辑；单个字段弹框取消时宿主只返回空值，该字段在弹框里未确认的输入不会保留。
-9. 插件自身的通知、对话框与 LLM 错误文案按 `host::locale()` 选择（中、英、日、韩），声明式文本走 `locales/zh-CN.json`、`ja.json`、`ko.json`，覆盖命令、设置页、动作、密钥以及设置项的标题、分组和说明；设置值（如类型表格的默认说明）不翻译，它们会进入 prompt。OpenIDEA 0.1.40 的界面语言没有日文，`ja.json` 暂时不会被选中。
+8. 插件自身的通知、对话框与 LLM 错误文案按 `host::locale()` 选择（中、英、日、韩），声明式文本走 `locales/zh-CN.json`、`ja.json`、`ko.json`，覆盖命令、设置页、动作、密钥以及设置项的标题、分组和说明；设置值（如类型表格的默认说明）不翻译，它们会进入 prompt。OpenIDEA 0.1.40 的界面语言没有日文，`ja.json` 暂时不会被选中。
 
 ## 8. 验证
 

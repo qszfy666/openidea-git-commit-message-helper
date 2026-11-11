@@ -1,16 +1,16 @@
 id = "qszfy666.commit-message-helper"
 name = "Git Commit Message Helper"
-version = "0.8.0"
+version = "0.9.0"
 description = "Generate a Conventional Commits message for the changes selected in OpenIDEA's native Commit panel, with an LLM."
 authors = ["qszfy666"]
 license = "Apache-2.0"
 icon = "icons/icon.svg"
 icon-dark = "icons/icon_dark.svg"
-change-notes = "0.8.0 — manual structured editor dialog and per-action button visibility; free-text commit language, field normalization, sentence bullets and a local quality check; per-project editor drafts; the compatibility cache now remembers what an endpoint refused; Chinese, Japanese and Korean translations of every setting and of the LLM errors. Needs OpenIDEA 0.1.40 (plugin API 1.4); new capabilities: storage, events."
+change-notes = "0.9.0 — simpler: the Commit panel keeps Generate and Generate with Requirements; the Format button, the field editor, model and prompt profiles, key slots 2–4 and the Models, Request URL, Thinking Levels and Thinking Help actions are removed, and saved profile values are no longer read. Needs OpenIDEA 0.1.41 (plugin API 1.5); new optional capability net:ask reaches an HTTPS endpoint outside the provider list once you allow that host."
 categories = ["vcs", "ai"]
-engines.openidea = "^1.4"
+engines.openidea = "^1.5"
 wasm = "dist/plugin.wasm"
-# Sets the four button context keys at start-up, so a hidden button is
+# Sets the two button context keys at start-up, so a hidden button is
 # hidden from the first frame instead of after the first command.
 activation = ["on-startup-finished"]
 
@@ -21,8 +21,11 @@ activation = ["on-startup-finished"]
 required = ["vcs.read", "vcs.write", "secrets", "storage", "events"]
 # Grant only the endpoints you use. `127.0.0.1` covers Magpie and local
 # OpenAI-compatible servers; `localhost` covers Ollama-on-localhost.
-# `clipboard` is optional: the model list copies the chosen id so it can be
-# pasted into the Model setting, which the plugin cannot write itself.
+# `net:ask` (API 1.5) covers a Base URL on any other HTTPS host: the IDE asks
+# the first time a command connects to it, and the user allows or refuses
+# that one host.
+# `clipboard` is optional: Restore Default copies the built-in commit template
+# so it can be pasted into the Templates setting.
 optional = [
   "net:api.openai.com",
   "net:api.anthropic.com",
@@ -40,6 +43,7 @@ optional = [
   "net:generativelanguage.googleapis.com",
   "net:127.0.0.1",
   "net:localhost",
+  "net:ask",
   "clipboard",
 ]
 
@@ -58,39 +62,8 @@ when = "vcsAvailable"
 icon = "review-comment"
 
 [[contributes.commands]]
-id = "format"
-title = "Format Commit Message"
-category = "Git Commit Message Helper"
-when = "vcsAvailable"
-icon = "list"
-
-# Opens the structured editor: a list of the commit fields, each edited in
-# its own dialog (plugin API 1.4 has no multi-field dialog).
-[[contributes.commands]]
-id = "manual"
-title = "Edit Commit Message Fields"
-category = "Git Commit Message Helper"
-icon = "edit"
-when = "vcsAvailable"
-
-[[contributes.commands]]
-id = "models"
-title = "List LLM Models"
-category = "Git Commit Message Helper"
-
-[[contributes.commands]]
-id = "endpoint"
-title = "Show LLM Request URL"
-category = "Git Commit Message Helper"
-
-[[contributes.commands]]
 id = "test"
 title = "Test LLM Connection"
-category = "Git Commit Message Helper"
-
-[[contributes.commands]]
-id = "template-preview"
-title = "Preview Commit Template"
 category = "Git Commit Message Helper"
 
 [[contributes.commands]]
@@ -101,16 +74,6 @@ category = "Git Commit Message Helper"
 [[contributes.commands]]
 id = "template-default"
 title = "Restore Default Commit Template"
-category = "Git Commit Message Helper"
-
-[[contributes.commands]]
-id = "thinking-levels"
-title = "Show Available Thinking Levels"
-category = "Git Commit Message Helper"
-
-[[contributes.commands]]
-id = "thinking-help"
-title = "Thinking Parameter Mapping Help"
 category = "Git Commit Message Helper"
 
 # The buttons above the message field of both the Commit tool window and the
@@ -124,16 +87,6 @@ when = "vcsAvailable && plugin.qszfy666.commit-message-helper.actionGenerate"
 menu = "commit.message"
 command = "generate-with-context"
 when = "vcsAvailable && plugin.qszfy666.commit-message-helper.actionGenerateWithContext"
-
-[[contributes.menus]]
-menu = "commit.message"
-command = "format"
-when = "vcsAvailable && plugin.qszfy666.commit-message-helper.actionFormat"
-
-[[contributes.menus]]
-menu = "commit.message"
-command = "manual"
-when = "vcsAvailable && plugin.qszfy666.commit-message-helper.actionManual"
 
 # Keep a Tools-menu entry for discoverability and for running it with a keymap.
 [[contributes.menus]]
@@ -164,10 +117,6 @@ title = "Commit Templates"
 schema = "settings/templates.json"
 
 [[contributes.settings.pages.actions]]
-title = "Preview"
-command = "template-preview"
-
-[[contributes.settings.pages.actions]]
 title = "Variables"
 command = "template-help"
 
@@ -184,40 +133,9 @@ schema = "settings/llm.json"
 title = "Test"
 command = "test"
 
-[[contributes.settings.pages.actions]]
-title = "Models"
-command = "models"
-
-[[contributes.settings.pages.actions]]
-title = "Request URL"
-command = "endpoint"
-
-[[contributes.settings.pages.actions]]
-title = "Thinking Levels"
-command = "thinking-levels"
-
-[[contributes.settings.pages.actions]]
-title = "Thinking Help"
-command = "thinking-help"
-
-# Four fixed key slots: model profiles pick one of them. Secrets must be
-# declared here, so a profile can only reference a slot listed in this manifest.
+# The API key every request carries; kept in the system keychain.
 [[contributes.secrets]]
 name = "api-key"
 label = "LLM API key"
-description = "Default key slot. Sent only to the endpoint you configure. Kept in the system keychain."
+description = "Sent only to the endpoint you configure. Kept in the system keychain."
 
-[[contributes.secrets]]
-name = "api-key-2"
-label = "LLM API key (slot 2)"
-description = "Optional second key slot for a model profile. Kept in the system keychain."
-
-[[contributes.secrets]]
-name = "api-key-3"
-label = "LLM API key (slot 3)"
-description = "Optional third key slot for a model profile. Kept in the system keychain."
-
-[[contributes.secrets]]
-name = "api-key-4"
-label = "LLM API key (slot 4)"
-description = "Optional fourth key slot for a model profile. Kept in the system keychain."

@@ -1,20 +1,17 @@
 //! Per-model thinking parameters (checklist items 24–28).
 //!
-//! A model profile picks a thinking level and a parameter preset. A preset is
+//! The LLM settings pick a thinking level and a parameter preset. A preset is
 //! a JSON object keyed by level; each value is a fragment merged into the
 //! request body. A custom mapping overrides the preset's template. `DEFAULT`
 //! and the `model-default` preset send nothing, so 0.7.x requests stay
 //! unchanged until the user opts in.
 //!
-//! The host's declarative settings cannot show conditional fields, so
-//! [`available_levels`] computes the levels the mapping really offers; the
-//! **Thinking Levels** action displays them and [`resolve`] refuses a level
-//! the mapping does not define.
+//! [`resolve`] refuses a level the mapping does not define.
 
 use crate::config::Protocol;
 use serde_json::{Map, Value, json};
 
-/// How much reasoning the profile asks the model for.
+/// How much reasoning the settings ask the model for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
     /// Send no thinking parameter; the provider applies its own default.
@@ -81,7 +78,7 @@ impl Level {
 pub enum Preset {
     /// Send nothing (the 0.7.x behaviour).
     ModelDefault,
-    /// Standard parameter family of the profile's protocol.
+    /// Standard parameter family of the configured protocol.
     Auto,
     OpenAiEffort,
     NestedEffort,
@@ -117,20 +114,6 @@ impl Preset {
             Some("anthropic-adaptive") => Self::AnthropicAdaptive,
             Some("custom") => Self::Custom,
             _ => Self::ModelDefault,
-        }
-    }
-
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::ModelDefault => "model-default",
-            Self::Auto => "auto",
-            Self::OpenAiEffort => "openai-effort",
-            Self::NestedEffort => "nested-effort",
-            Self::ThinkingObject => "thinking-object",
-            Self::EnableThinking => "enable-thinking",
-            Self::AnthropicBudget => "anthropic-budget",
-            Self::AnthropicAdaptive => "anthropic-adaptive",
-            Self::Custom => "custom",
         }
     }
 }
@@ -188,7 +171,7 @@ const RESERVED_REQUEST_FIELDS: [&str; 15] = [
     "response_format",
 ];
 
-/// The default mapping of a preset. `auto` follows the profile's protocol;
+/// The default mapping of a preset. `auto` follows the configured protocol;
 /// custom starts empty because the user supplies the whole mapping.
 pub fn preset_template(preset: Preset, protocol: Protocol) -> String {
     const GRADED: [(Level, &str); 3] = [
@@ -408,31 +391,6 @@ fn check_fragment(value: &Value, depth: usize, path: &[&str]) -> Result<(), Stri
     }
 }
 
-/// The levels the current preset/mapping actually offers (item 27), and a
-/// validation error when the mapping cannot be used at all.
-pub fn available_levels(
-    settings: &Settings,
-    protocol: Protocol,
-    max_tokens: u32,
-) -> (Vec<Level>, Option<String>) {
-    let mut levels = vec![Level::Default];
-    if settings.preset == Preset::ModelDefault {
-        return (levels, None);
-    }
-    let mapping = match validate(&mapping_text(settings, protocol)) {
-        Ok(mapping) => mapping,
-        Err(error) => return (levels, Some(error)),
-    };
-    for level in Level::SPECIFIED {
-        if let Some(fragment) = mapping.get(level.key())
-            && fragment_for(fragment, level, max_tokens).is_ok()
-        {
-            levels.push(level);
-        }
-    }
-    (levels, None)
-}
-
 /// The fragment the selected level sends, or the reason it was omitted.
 pub fn resolve(settings: &Settings, protocol: Protocol, max_tokens: u32) -> Resolution {
     if settings.level == Level::Default || settings.preset == Preset::ModelDefault {
@@ -548,7 +506,7 @@ mod tests {
         );
         for preset in Preset::ALL {
             let template = preset_template(preset, Protocol::OpenAiChat);
-            assert!(validate(&template).is_ok(), "{}: {template}", preset.key());
+            assert!(validate(&template).is_ok(), "{preset:?}: {template}");
         }
     }
 
@@ -616,29 +574,6 @@ mod tests {
 
         let huge = format!(r#"{{"HIGH":{{"x":"{}"}}}}"#, "a".repeat(MAX_MAPPING_LENGTH));
         assert!(validate(&huge).unwrap_err().contains("too large"));
-    }
-
-    #[test]
-    fn available_levels_follow_the_mapping() {
-        let default = settings(Preset::ModelDefault, Level::High, None);
-        assert_eq!(
-            available_levels(&default, Protocol::OpenAiChat, 4096).0,
-            vec![Level::Default]
-        );
-
-        let on_off = settings(
-            Preset::Custom,
-            Level::Enabled,
-            Some(r#"{"ENABLED":{"enable_thinking":true}}"#),
-        );
-        let (levels, error) = available_levels(&on_off, Protocol::OpenAiChat, 4096);
-        assert_eq!(levels, vec![Level::Default, Level::Enabled]);
-        assert!(error.is_none());
-
-        let broken = settings(Preset::Custom, Level::High, Some("[]"));
-        let (levels, error) = available_levels(&broken, Protocol::OpenAiChat, 4096);
-        assert_eq!(levels, vec![Level::Default]);
-        assert!(error.is_some());
     }
 
     #[test]

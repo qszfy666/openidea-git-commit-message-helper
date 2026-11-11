@@ -69,7 +69,7 @@
       "type": "string",
       "title": "Thinking level",
       "enum": ["DEFAULT", "DISABLED", "ENABLED", "LOW", "MEDIUM", "HIGH", "MAX"],
-      "description": "DEFAULT sends no thinking parameter. Only levels the selected preset or mapping offers are sent; run Thinking Levels to see them.",
+      "description": "DEFAULT sends no thinking parameter. Only levels the selected preset or mapping offers are sent.",
       "group": "Thinking",
       "default": "DEFAULT"
     },
@@ -85,90 +85,8 @@
       "type": "string",
       "title": "Thinking mapping",
       "multiline": true,
-      "description": "Optional JSON keyed by level, e.g. {\"HIGH\":{\"reasoning_effort\":\"high\"}}. Overrides the preset template; clear it to restore the preset. Run Thinking Help for the rules and the preset template.",
+      "description": "Optional JSON keyed by level, e.g. {\"HIGH\":{\"reasoning_effort\":\"high\"}}. Overrides the preset template; clear it to restore the preset.",
       "group": "Thinking",
-      "default": ""
-    },
-    "modelProfiles": {
-      "type": "array",
-      "title": "Model profiles",
-      "description": "Named connection settings. Add, rename, edit, copy and remove rows here. One profile is active at a time; a blank Active model keeps using the single settings above. Every profile has its own token limit, key slot and thinking settings. Keys are plugin secrets under Settings > Plugins > Secrets, never text in this table.",
-      "group": "Profiles",
-      "items": {
-        "type": "object",
-        "properties": {
-          "name": { "type": "string", "title": "Name", "default": "" },
-          "provider": {
-            "type": "string",
-            "title": "Provider",
-            "enum": [
-              "OpenAI",
-              "Anthropic",
-              "DeepSeek",
-              "Qwen",
-              "Kimi",
-              "GLM",
-              "MiniMax",
-              "SiliconFlow",
-              "Volcengine",
-              "Azure OpenAI",
-              "OpenRouter",
-              "Groq",
-              "Mistral",
-              "Ollama",
-              "Magpie",
-              "Custom"
-            ],
-            "default": "DeepSeek"
-          },
-          "protocol": {
-            "type": "string",
-            "title": "Protocol",
-            "enum": ["auto", "openai-chat", "openai-responses", "anthropic"],
-            "default": "auto"
-          },
-          "baseUrl": { "type": "string", "title": "Base URL", "default": "" },
-          "model": { "type": "string", "title": "Model", "default": "" },
-          "temperature": { "type": "number", "title": "Temperature", "default": 0.5 },
-          "sendTemperature": { "type": "boolean", "title": "Send temperature", "default": true },
-          "maxTokens": { "type": "integer", "title": "Max response tokens", "default": 64000 },
-          "secretSlot": {
-            "type": "string",
-            "title": "Key slot",
-            "enum": ["api-key", "api-key-2", "api-key-3", "api-key-4"],
-            "description": "Which declared plugin secret this profile sends. Fill each slot under Settings > Plugins > Secrets.",
-            "default": "api-key"
-          },
-          "thinkingLevel": {
-            "type": "string",
-            "title": "Thinking level",
-            "enum": ["DEFAULT", "DISABLED", "ENABLED", "LOW", "MEDIUM", "HIGH", "MAX"],
-            "description": "DEFAULT sends nothing. Thinking Levels lists the levels this mapping really offers.",
-            "default": "DEFAULT"
-          },
-          "thinkingPreset": {
-            "type": "string",
-            "title": "Thinking preset",
-            "enum": ["model-default", "auto", "openai-effort", "nested-effort", "thinking-object", "enable-thinking", "anthropic-budget", "anthropic-adaptive", "custom"],
-            "description": "Request-fragment family. A blank Thinking mapping uses the preset template.",
-            "default": "model-default"
-          },
-          "thinkingMapping": {
-            "type": "string",
-            "title": "Thinking mapping",
-            "multiline": true,
-            "description": "Optional JSON keyed by level; overrides the preset template. Clear it to restore the preset.",
-            "default": ""
-          }
-        }
-      },
-      "default": []
-    },
-    "activeModel": {
-      "type": "string",
-      "title": "Active model profile",
-      "description": "Name of the model profile to use. Blank uses the single settings above. This Project value overrides the Global one; leave it blank in a project to inherit the global choice.",
-      "group": "Profiles",
       "default": ""
     }
   }
