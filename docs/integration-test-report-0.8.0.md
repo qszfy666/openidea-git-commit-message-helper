@@ -4,7 +4,7 @@
 - 宿主：本机已安装 OpenIDEA 0.1.40（`ai.l0ng.openidea`，插件 API 1.4）
 - 插件：`qszfy666.commit-message-helper` 0.8.0（active = 0.8.0，packageHash `4ad89b00…`）
 - 被测代码：本仓库 `main`（0.8.0，含本轮修复），wasm 为本报告重新构建的干净版本（425,268 B）
-- 结论：核心生成链路与 0.6/0.7.1/0.8.0 的大部分新功能在真实 IDE 上可用。发现 1 个缺陷，已修复（D1）。模型档案不生效（D2）查明是手写的设置行缺列，被宿主整表丢弃，还要用设置页表格复测。另有 1 个环境相关问题（D3）、1 处文档与实现不一致（D4，已修正）和 1 项工具链版本问题（D5）。
+- 结论：核心生成链路与 0.6/0.7.1/0.8.0 的大部分新功能在真实 IDE 上可用。发现 1 个缺陷，已修复（D1）。模型档案不生效（D2）查明是手写的设置行缺列，被宿主整表丢弃；2026-11-11 用设置页表格建行复测通过，插件不需要修改。另有 1 个宿主行为问题（D3：插件弹框没人回答时，别的窗口里点这个插件的命令会静默排队，2026-11-11 已复现，插件不需要修改）、1 处文档与实现不一致（D4，已修正）和 1 项工具链版本问题（D5）。
 
 ## 1. 环境与前置
 
@@ -44,8 +44,8 @@
 | 提示词档案 `promptProfiles` + `defaultPrompt` | ✅ 通过 | system prompt 中出现 `PROMPT-PROFILE-MARKER` |
 | 提交模板 `templates` + `defaultTemplate` | ✅ 通过 | 自定义模板渲染出 `{{header}}` + `BODY=…` + `FOOTER-TEMPLATE-MARKER` |
 | 提交类型描述 `commitTypes[].description` | ✅ 通过 | user prompt 的 Allowed types 段出现 `feat (TYPE-DESC-MARKER)` |
-| 模型档案 `modelProfiles` + `activeModel` | ⚠️ 待复测 | 同一 settings.toml 内 `activeModel="A"`、档案 model=`profile-A-model`/temp=0.2/maxTokens=8000，但请求仍为全局 `model=base-model`、`temperature=0.5`、`max_tokens=64000`。原因是手写的行没有填满 12 列，宿主把整张表当作无效值换成默认空表（见 D2），需要用设置页表格建行后复测 |
-| 每档案独立密钥槽 / Max tokens | ⚠️ 待复测 | 随上项未进入档案路径；授权头存在（Bearer magpie…） |
+| 模型档案 `modelProfiles` + `activeModel` | ✅ 复测通过 | 首轮手写的行没有填满 12 列，宿主把整张表换成默认空表，请求仍用单项设置（见 D2）。复测时用设置页表格「添加」一行（12 列齐全），设为当前模型档案后点「测试」，请求为 `model=profile-A-model`、`temperature 0.5`，不是单项设置的 `codearts/deepseek-v4.1-flash-1017` |
+| 每档案独立密钥槽 / Max tokens | ⚠️ 未单独验证 | 复测的档案用默认密钥槽 `api-key`，授权头存在（Bearer magpie…）；「测试」固定发 `max_tokens 16`，档案的 maxTokens 要在生成请求里核对 |
 | 项目级覆盖全局 | ⚠️ 未覆盖 | 未在项目层设置验证 |
 
 ### 0.7.1（第二批子批次 2）
@@ -80,19 +80,36 @@
 - 补充：复核时发现这个修复让 `Closes:#12`（标签和引用之间没有空格）退化了。旧实现会剥成 `#12`，新实现原样保留，渲染出来是 `Closes Closes:#12`。现在带冒号的标签粘在引用上时只去掉标签，并新增回归测试 `normalize_strips_a_label_written_without_a_space`。两个回归测试都先在缺陷代码上失败（`"#12, Closes"`、`"Closes:#12, fixes:#13"`），修复后通过。
 - 状态：`src/prompt.rs` 已修改；129 个单元测试 + 1 个词条覆盖测试、fmt、clippy 通过。补充修复之后已重新构建 wasm，并通过 0.1.40 CLI 的 `check`，重新打成调试包 `dist/qszfy666.commit-message-helper-0.8.0-debug.oiplugin`（未签名）。这个包还没有装进 IDE。
 
-### D2（已查明，待复测）`modelProfiles` / `activeModel` 在真实 IDE 未生效
+### D2（已查明，复测通过）`modelProfiles` / `activeModel` 在真实 IDE 未生效
 
 - 现象：`promptProfiles`、`templates`、`thinking`、`language` 均从同一份 settings.toml 生效，但 `activeModel="A"` 的档案（model/profile-A-model、temperature 0.2、maxTokens 8000）没有进入请求；请求仍用全局 `model=base-model`、0.5、64000。
 - 原因：宿主 0.1.40 只把通过 schema 校验的设置值交给插件，校验不过就换成默认值（`crates/ide-host/src/plugins/api.rs` 的 `setting`：`user.get(key).filter(|v| setting.accepts(v))…unwrap_or(setting.default)`）。表格行的校验要求列数和 schema 完全一致，每一列都要在、类型和枚举都要对（`crates/ide-host/src/plugins/ui_points.rs` 的 `accepts`：`o.len() == self.properties.len() && …all(…)`），只要有一行不合格，整张表都不通过。`modelProfiles` 有 12 列，手写的行只填了 name、model、temperature、maxTokens 等几列，所以插件读到的是默认空表，`selected()` 找不到档案，回退到单项设置。`promptProfiles`（name、text）和 `templates`（name、template）只有两列，手写时容易填全，所以它们生效。设置页本身也用同一套校验（`src/features/plugins/settings.tsx` 的 `accepts`），存了不合格值时表格显示为空。
 - 插件侧：`config::selected()` 的逻辑没有问题，不需要改。设置页「Add」用所有列的默认值新建一行（`structuredClone(item.default)`），所以通过界面建的行是完整的。
-- 待复测：用设置页「模型档案」表格新建一行并设为 Active model，或者在 settings.toml 里写满 12 列（name、provider、protocol、baseUrl、model、temperature、sendTemperature、maxTokens、secretSlot、thinkingLevel、thinkingPreset、thinkingMapping），再生成一次。
+- 复测（2026-11-11，OpenIDEA 0.1.40，同一个 mock）：
+  - 在 设置 › 插件 › Git Commit Message Helper › LLM 设置（全局）的「模型档案」表格点「添加」，新行 12 列都带默认值。填名称 `A`、基础 URL `http://127.0.0.1:18787/v1`、模型 `profile-A-model`，其余列保持默认（温度 0.5、最大响应 token 数 64000、密钥槽 `api-key`），「当前模型档案」填 `A`，点「应用」。
+  - 全局 settings.toml 里写入的行有 12 列（name、provider、protocol、baseUrl、model、temperature、sendTemperature、maxTokens、secretSlot、thinkingLevel、thinkingPreset、thinkingMapping），并有 `activeModel = "A"`。
+  - 点同页的「测试」，mock 收到 `POST /v1/chat/completions`，请求体 `model=profile-A-model`、`temperature=0.5`、`max_tokens=16`。单项设置的模型是 `codearts/deepseek-v4.1-flash-1017`，所以请求用的是档案。`max_tokens 16` 是「测试」固定的 `TEST_TOKENS`（`src/llm.rs`）。「测试」和「生成」都通过 `Config::load()` 解析档案（`src/lib.rs` 的 `test_connection` 和 `generate`），本轮没有再点「生成」。
+  - 温度和最大 token 数没有改成首轮的 0.2 和 8000：数字输入框只能靠按键清空，而本机输入法（拼音模式）会截获自动发送的按键，所以保持默认值。模型名已能区分档案和单项设置。
+  - 复测后已在设置页删除这一行、清空「当前模型档案」并应用，再用测试前的备份覆盖 settings.toml，与测试前逐字节一致。
 - 遗留风险：以后给表格加列时，旧版本存下的行会因列数不一致被整表丢弃，档案会静默失效。0.7.0 和 0.7.1 没有打 tag 发布，目前没有用户持有旧格式的行，所以本轮不处理。
 
-### D3（环境/生命周期相关）切换项目后工具栏命令静默不执行
+### D3（已复现，宿主行为）插件弹框没人回答时，这个插件的其它命令静默排队
 
-- 现象：在一次会话中先打开 `hospital`、再切回 `commit-helper-fixture` 后，点击“生成提交信息”无任何请求、无通知、插件日志无 `run`；同一时刻点击“提交/贮藏”页签等原生控件正常。完全退出并重启 OpenIDEA 后，首次点击即成功。
-- 影响：真实用户切换项目后可能遇到“按钮在但点了没反应”，需要重启 IDE。
-- 说明：需要在干净环境复现确认是宿主插件实例回收/重激活问题还是插件 `activation` 设计问题。本次工作台的焦点抢占与频繁切项目会放大该现象。
+- 原现象（2026-11-10）：先打开 `hospital`、再切回 `commit-helper-fixture` 后，点击“生成提交信息”无任何请求、无通知、插件日志无 `run`；同一时刻点击“提交/贮藏”页签等原生控件正常。完全退出并重启 OpenIDEA 后，首次点击即成功。
+- 复现（2026-11-11，OpenIDEA 0.1.40，同一个 mock）：
+  - 同一窗口切项目**不会**复现。主窗口从 hospital 切到 fixture 后点「生成」正常。再用「最近打开」菜单把主窗口切到一个临时仓库再切回 fixture（日志为 `open_project_window … new_window=false`、`in window main`），点「生成」也正常：mock 收到请求，提交消息框写入结果，通知显示。
+  - 能复现的顺序：在主窗口（fixture）点「按补充要求生成提交信息」，弹框打开后不回答；在第二个窗口（`project-1`，临时仓库）点「生成」。10 秒内 mock 没有请求，提交消息框为空，没有通知，日志没有记录，与原现象一致。回到主窗口点弹框的「取消」，1 秒后排队的「生成」发出请求，并写入了 `project-1` 的提交消息框。
+  - 弹框切项目后仍然显示。在同一窗口里它是模态的，挡住整个窗口，所以「按钮能点但没反应」只会出现在别的窗口。
+- 原因（宿主 0.1.40）：
+  - `crates/ide-host/src/plugins/api.rs` 的 `ask` 等弹框回答时没有超时，只有收到回答、取消令牌被触发、或者窗口关闭（`forget_client`，只在窗口销毁时调用）才结束。
+  - 同一个插件的调用是串行的，后面的 `run_command` 在队列里等前一个调用返回。
+  - 前端 `runPluginCommand`（`src/features/plugins/store.ts`）一直等待返回，期间没有忙碌提示。
+- 原始证据的局限：
+  - 当时 `plugins` 组通知是 `display = "none"`，命令失败的通知也属于这个组，所以「无通知」说明不了命令没报错。
+  - 插件的 stderr 在调用返回后才写进日志（`crates/ide-plugin/src/runtime.rs` 的 `call`），卡住的调用不会留下 `run`。
+  - 2026-11-10 从 11:24:30（UTC）插件激活到 12:24:34 重启，日志里没有一次完成的调用，mock 也没收到插件的请求，故障可能在切项目之前就开始了。当天开过 `main`、`project-1`、`project-2` 三个窗口，没有关窗记录，无法确认当时别的窗口里是否挂着弹框。只能说这个机制能产生同样的现象，不能确定昨天就是它。
+- 插件侧：不需要修改。插件在等弹框回答时收不到别的窗口的点击，也没有接口知道有调用在排队。
+- 建议宿主：弹框等待设上限，或者插件被弹框占用时，点击它的命令要给出提示，并把挂着弹框的窗口带到前面。已起草上游 issue，尚未提交。
 
 ### D4（已修正）0.8.0 CHANGELOG 描述的是“工具窗视图”，实现是“字段列表弹框”
 
@@ -118,8 +135,8 @@
 
 ## 6. 未覆盖项与建议下一步
 
-1. 用设置页“模型档案”表格新建/选中档案（或手写满 12 列）复测 D2。按宿主代码判断应能生效，插件侧不需要修改。
-2. 干净环境（不频繁切项目、不抢焦点）复现 D3，确认插件实例回收后的重激活路径。
+1. D2 已复测通过（见 D2）。还可以在生成请求里核对档案的 maxTokens 和非默认密钥槽。
+2. D3 已复现（见 D3），插件不需要修改；宿主侧的改进建议已起草为上游 issue，尚未提交。
 3. 逐项走查仅单测覆盖的 UI 项：手动编辑器写回与按项目草稿、字段显隐/排序、Skip CI 预设、每动作显隐（Find Action 回退）、日韩界面语言、模板预览/变量帮助/恢复默认、思考映射校验与 Thinking Levels/Help。
 4. 用真实服务端点补测 Models 列表、Request URL、Test，以及 50 秒共享预算/超时路径。
 5. `check .` 和 `pack` 已用 0.1.40 CLI 补跑并通过（见 D5）；发布前还要签名打包。
